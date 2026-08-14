@@ -1,0 +1,18 @@
+{
+  "name": "paseo-fleet-guard",
+  "version": "3.2.0-beta.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "guard": "node src/fleet-guard.mjs",
+    "install-guard": "node install.mjs",
+    "diagnose": "node src/diagnose.mjs",
+    "test": "node --test --test-isolation=none tests/continuation-engine.test.mjs"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.4.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

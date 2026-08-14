@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fleet Guard — Usage Guide</title>
+  <style>
+    :root { --ink:#171920; --muted:#6e7480; --line:#e2e6ed; --accent:#6374dc; --soft:#f3f5fa; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at 18% 8%,#e9edff 0,transparent 31%),radial-gradient(circle at 84% 18%,#f0e8ff 0,transparent 28%),#f5f7fb; line-height:1.55; }
+    .shell { width:min(940px,calc(100% - 34px)); margin:34px auto; background:rgba(255,255,255,.78); border:1px solid rgba(214,219,230,.86); border-radius:30px; box-shadow:0 28px 80px rgba(44,51,69,.16); backdrop-filter:blur(24px); overflow:hidden; }
+    header { padding:46px 54px 35px; border-bottom:1px solid var(--line); background:linear-gradient(140deg,rgba(255,255,255,.8),rgba(244,246,253,.64)); }
+    .brand { display:flex; align-items:center; gap:11px; color:#414754; font-size:13px; font-weight:650; }
+    .mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; color:white; font-weight:750; background:linear-gradient(145deg,#5a70e6,#855cde); box-shadow:0 8px 20px rgba(94,110,217,.28); }
+    .eyebrow { margin-top:35px; color:var(--accent); font-size:11px; font-weight:750; letter-spacing:.12em; }
+    h1 { margin:9px 0 12px; font-size:clamp(34px,5vw,54px); line-height:1.05; letter-spacing:-.035em; font-weight:680; }
+    .lead { margin:0; color:var(--muted); font-size:17px; max-width:690px; }
+    main { padding:42px 54px 54px; }
+    h2 { margin:40px 0 14px; font-size:22px; letter-spacing:-.015em; }
+    h2:first-child { margin-top:0; }
+    p { color:var(--muted); }
+    .steps { display:grid; grid-template-columns:repeat(3,1fr); gap:13px; margin:20px 0 10px; }
+    .step,.card { border:1px solid var(--line); border-radius:19px; background:rgba(255,255,255,.78); padding:20px; }
+    .number { width:29px; height:29px; display:grid; place-items:center; border-radius:9px; background:#ecf0ff; color:#586ad4; font-size:12px; font-weight:750; }
+    .step strong { display:block; margin:13px 0 6px; font-size:14px; }
+    .step span { color:var(--muted); font-size:12px; }
+    .callout { margin:20px 0; padding:18px 20px; border-radius:17px; background:#edf3ff; color:#53617d; font-size:13px; border:1px solid #dce6fa; }
+    .answer { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+    .card strong { display:block; margin-bottom:5px; font-size:14px; }
+    .card p { margin:0; font-size:12.5px; }
+    code { padding:2px 6px; background:#edf0f5; border-radius:6px; color:#444b58; }
+    .links { display:flex; flex-wrap:wrap; gap:9px; margin-top:16px; }
+    a { color:#5166d0; text-decoration:none; font-weight:650; }
+    .links a { padding:9px 12px; border:1px solid #dfe3eb; border-radius:10px; background:white; font-size:12px; }
+    footer { padding:22px 54px; border-top:1px solid var(--line); color:#8b919b; font-size:11px; }
+    @media(max-width:720px){ .shell{margin:14px auto;border-radius:23px} header,main{padding:32px 25px}.steps,.answer{grid-template-columns:1fr} footer{padding:20px 25px} }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand"><span class="mark">F</span>Fleet Guard</div>
+      <div class="eyebrow">USAGE GUIDE</div>
+      <h1>Launch once.<br>Keep moving.</h1>
+      <p class="lead">Fleet Guard watches Claude tasks inside Paseo and hands unfinished work to your configured fallback providers after a real quota or session-limit failure.</p>
+    </header>
+    <main>
+      <h2>Everyday use</h2>
+      <div class="steps">
+        <div class="step"><span class="number">1</span><strong>Open the combined shortcut</strong><span>Use <b>Fleet Supervisor - On Paseo</b> on your Desktop or Start Menu instead of the original Paseo shortcut.</span></div>
+        <div class="step"><span class="number">2</span><strong>Work in a root Claude task</strong><span>Use Claude normally in Paseo. There is no Fleet chat and nothing to activate manually.</span></div>
+        <div class="step"><span class="number">3</span><strong>Let the handoff happen</strong><span>After a recorded limit, Paseo providers appear as a child task named <b>Fleet Guard · provider</b> and continue the active request.</span></div>
+      </div>
+      <div class="callout"><b>Invisible and Paseo-scoped.</b> Fleet Guard uses a native windowless launcher, so it does not appear in Alt+Tab or on the taskbar. Once Paseo's daemon is gone for 20 seconds, Fleet Guard exits completely. Closing only the visible window may leave the daemon running; fully quit Paseo when you want both stopped.</div>
+
+      <h2>Continue a job that already stopped</h2>
+      <div class="answer">
+        <div class="card"><strong>Already visible in Paseo</strong><p>Launch <b>Fleet Supervisor - On Paseo</b>. It scans recent root Claude tasks automatically, including failures from before the Guard started. You do not need to resend the prompt.</p></div>
+        <div class="card"><strong>Currently outside Paseo</strong><p>Import or reopen the Claude conversation in Paseo first. Fleet Guard cannot inspect Claude Desktop, claude.ai, Cursor, or another app directly.</p></div>
+      </div>
+
+      <h2>What the handoff contains</h2>
+      <p>The fallback receives the active user request, a compact recent timeline, the working directory and workspace, and a completion contract. It must finish and verify the task, report that another provider should continue, or stop for genuinely necessary human input.</p>
+
+      <h2>Choose how persistence works</h2>
+      <div class="answer">
+        <div class="card"><strong>Return to Claude</strong><p>After the provider list and cooldown, Guard first retries the original Claude task—the “father”—then works through the fallback priority list again if Claude is still limited.</p></div>
+        <div class="card"><strong>Cycle fallback providers</strong><p>Guard repeatedly follows the priority list without retrying Claude. When reuse is enabled, it returns to each provider's existing child instead of starting a fresh conversation.</p></div>
+        <div class="card"><strong>One pass, then stop</strong><p>Each provider gets its configured turn and nudges once. When the list ends, Guard becomes dormant. This matches the older behavior.</p></div>
+        <div class="card"><strong>Nudges and completion checks</strong><p>An unfinished child can receive extra turns in the same session. The completion challenge asks it to inspect the diff and tests once more before Guard accepts that the shared task is finished.</p></div>
+      </div>
+      <div class="callout"><b>Persistent does not mean Windows-resident.</b> Cooldown cycles continue only while Paseo is running. Fully quitting Paseo, including its daemon, pauses the chain; reopening with the combined shortcut resumes a recent interrupted chain from its saved cycle and child IDs.</div>
+
+      <h2>Permissions and provider limits</h2>
+      <p>Guard-created tasks use automation-friendly modes: Codex auto-review, a dedicated Fleet Cursor connection with Cursor's yolo/trust flags, Copilot allow-all, Antigravity's non-interactive permission option, and a Fleet-only OpenCode profile for local models. Those choices affect only fallback tasks created by Fleet Guard. Every cloud provider still uses its own installed CLI, account, subscription, policy, and quota. Fleet Guard does not bypass or reset limits.</p>
+
+      <h2>Add a model running on this PC</h2>
+      <p>Choose <b>Local model</b> on the provider page. Fleet Guard uses OpenCode as the coding-agent harness, so the model receives real read, edit, and shell tools in the shared Paseo workspace instead of receiving only a copied text prompt.</p>
+      <div class="answer">
+        <div class="card"><strong>Install the two pieces</strong><p>Install OpenCode plus a local server such as Ollama, LM Studio, or llama.cpp. Start or load a coding-capable model in that server.</p></div>
+        <div class="card"><strong>Connect the endpoint</strong><p>Click <b>Configure</b>. Ollama normally uses <code>http://127.0.0.1:11434/v1</code>. Click <b>Find models</b>, choose one returned by the server, and add it to the priority list.</p></div>
+        <div class="card"><strong>Private by construction</strong><p>The endpoint must resolve to this same PC. Fleet Guard does not request or store a local API key, and its OpenCode profile does not alter your normal OpenCode settings.</p></div>
+        <div class="card"><strong>Choose an agentic model</strong><p>Reliable tool calling matters more than chat quality. For Ollama, a coding model with roughly 16k-32k context is a sensible starting point.</p></div>
+      </div>
+
+      <h2>Where each fallback appears</h2>
+      <div class="answer">
+        <div class="card"><strong>Codex, local models, Cursor, and Copilot</strong><p>These are Paseo providers. When Fleet Guard reaches one, it creates a visible child task under the halted Claude task.</p></div>
+        <div class="card"><strong>Antigravity</strong><p>Antigravity runs as an external CLI worker, so it does not create a Paseo tab. Its start, result, and any error are written to the Guard log and handoff report.</p></div>
+      </div>
+
+      <h2>Understanding setup sign-in status</h2>
+      <p><b>Signed in</b> means Setup found the provider's credential entry without reading or copying its secret. <b>Live test passed</b> means you deliberately chose Verify and the provider answered one short no-tools request. Verify is optional and uses provider quota; Antigravity may report a large fixed input context even for this short probe.</p>
+
+      <h2>Status, configuration, and removal</h2>
+      <div class="answer">
+        <div class="card"><strong>Change the policy</strong><p>Open <b>Fleet Guard Settings</b> from the Start Menu. It reloads your saved provider selection, priority order, and continuation choices.</p></div>
+        <div class="card"><strong>See what happened</strong><p>Open <code>STATUS.cmd</code> in <code>%LOCALAPPDATA%\PaseoFleetGuard</code>. It shows the current policy, cycle, next retry, recent activity, and handoff state.</p></div>
+        <div class="card"><strong>Remove Fleet Guard</strong><p>Open <code>UNINSTALL.cmd</code> in the installation folder. It stops the Guard and removes the combined shortcuts. Logs and configuration remain for recovery.</p></div>
+      </div>
+
+      <h2>Official provider help</h2>
+      <div class="links">
+        <a href="https://paseo.sh/">Paseo</a>
+        <a href="https://docs.anthropic.com/en/docs/claude-code/getting-started">Claude Code</a>
+        <a href="https://learn.chatgpt.com/docs/codex/cli">Codex</a>
+        <a href="https://opencode.ai/docs/">OpenCode</a>
+        <a href="https://ollama.com/download/windows">Ollama</a>
+        <a href="https://antigravity.google/docs/cli-install">Antigravity</a>
+        <a href="https://docs.cursor.com/en/cli/installation">Cursor Agent</a>
+        <a href="https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli">Copilot CLI</a>
+      </div>
+    </main>
+    <footer>Fleet Guard is an independent community utility and is not affiliated with Anthropic, OpenAI, Google, Cursor, GitHub, or Paseo.</footer>
+  </div>
+</body>
+</html>

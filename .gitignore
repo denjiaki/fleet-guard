@@ -1,0 +1,52 @@
+# Dependencies and generated configuration
+node_modules/
+payload/node_modules/
+payload/launcher-config.json
+
+# Build and release output
+desktop/bin/
+release/
+*.zip
+
+# Local QA artifacts
+test-*/
+zip-*/
+release-verify-*/
+audit-public-*/
+test-fixtures/
+*-qa.png
+fallback-policy-v*.png
+provider-setup-v*.png
+fleet-icon-preview.png
+work-dev-*.log
+
+# Unrelated local web prototype files
+/.openai/
+/.next/
+/.vinext/
+/.wrangler/
+/app/
+/build/
+/db/
+/drizzle/
+/examples/
+/public/
+/tests/
+/worker/
+/drizzle.config.ts
+/eslint.config.mjs
+/next-env.d.ts
+/next.config.ts
+/package.json
+/package-lock.json
+/postcss.config.mjs
+/tsconfig.json
+/vite.config.ts
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.user
+*.suo
+.vs/
+.vscode/
