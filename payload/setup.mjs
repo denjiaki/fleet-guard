@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fleet Supervisor — cross-platform setup.
+ * Fleet Supervisor â€” cross-platform setup.
  *
  * Replaces the Windows-only C# setup app and launcher shortcut. There is no
  * longer anything platform-specific to install:
@@ -17,11 +17,15 @@
  *   node setup.mjs                 # install
  *   node setup.mjs --uninstall     # remove the plugin registration
  *   node setup.mjs --paseo-home X  # override Paseo's home directory
+ *   node setup.mjs --keep-legacy   # do not clean up an older install
  *
  * Safe to re-run: every write is idempotent and existing settings are kept.
+ * Installing also removes what a pre-v4 install left behind â€” the Windows-only
+ * launcher directory and its shortcuts â€” so upgrading does not leave a stale
+ * shortcut pointing at a guard that no longer belongs there.
  */
 
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access, rm, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -98,6 +102,102 @@ async function writeJson(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+/* ------------------------------------------------------------------ */
+/* Legacy cleanup                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fleet Guard v3 and earlier installed a Windows-only C# launcher into
+ * `%LOCALAPPDATA%\PaseoFleetGuard` and left shortcuts behind that start it.
+ * None of that is used any more â€” the plugin starts the guard itself â€” but an
+ * upgrade used to leave both in place, so a stale shortcut would silently
+ * launch the old guard against the new Paseo.
+ *
+ * Removing them is part of installing, so an upgrade cleans up after its own
+ * predecessors. Pass `--keep-legacy` to leave them alone.
+ */
+/**
+ * Matched by prefix rather than exact name. Older installs shipped several
+ * shortcuts ("â€¦ - On Paseo", "Fleet Guard Settings", and others), and an exact
+ * list quietly misses whichever one it does not know about â€” which is how a
+ * stale "Fleet Guard Settings" shortcut survived a cleanup that removed its
+ * target directory, leaving a shortcut pointing at nothing.
+ */
+const LEGACY_SHORTCUT_PREFIXES = ["Fleet Guard", "Fleet Supervisor", "Paseo (Fleet Supervisor)"];
+
+function isLegacyShortcut(name) {
+  if (!name.toLowerCase().endsWith(".lnk")) return false;
+  return LEGACY_SHORTCUT_PREFIXES.some((prefix) =>
+    name.toLowerCase().startsWith(prefix.toLowerCase()),
+  );
+}
+
+function legacyShortcutDirectories() {
+  if (process.platform !== "win32") return [];
+  const home = os.homedir();
+  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
+  const dirs = [
+    path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs"),
+    path.join(home, "Desktop"),
+  ];
+  // Desktop is often redirected into OneDrive, and the shortcut follows it.
+  if (process.env.OneDrive) dirs.push(path.join(process.env.OneDrive, "Desktop"));
+  return dirs;
+}
+
+function legacyInstallDirectories() {
+  if (process.platform !== "win32") return [];
+  const localAppData =
+    process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+  return [path.join(localAppData, "PaseoFleetGuard")];
+}
+
+async function removeLegacyArtifacts() {
+  const removed = [];
+  const failed = [];
+
+  for (const dir of legacyShortcutDirectories()) {
+    let entries;
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue; // Directory may not exist on this machine; nothing to clean.
+    }
+    for (const name of entries) {
+      if (!isLegacyShortcut(name)) continue;
+      const target = path.join(dir, name);
+      try {
+        await rm(target, { force: true });
+        removed.push(target);
+      } catch (error) {
+        failed.push(`${target} (${error?.message ?? error})`);
+      }
+    }
+  }
+
+  for (const dir of legacyInstallDirectories()) {
+    if (!(await exists(dir))) continue;
+    try {
+      // Settings and logs live in ~/.paseo-fleet-guard, not here, so this only
+      // removes the old program files.
+      await rm(dir, { recursive: true, force: true });
+      removed.push(dir);
+    } catch (error) {
+      failed.push(`${dir} (${error?.message ?? error})`);
+    }
+  }
+
+  if (removed.length > 0) {
+    console.log("Removed leftovers from an earlier Fleet Guard install:");
+    for (const item of removed) console.log(`  - ${item}`);
+  }
+  if (failed.length > 0) {
+    console.log("Could not remove these (close Paseo and any old launcher, then re-run):");
+    for (const item of failed) console.log(`  - ${item}`);
+  }
+  return { removed, failed };
+}
+
 /** Resolve the plugin directory and guard script relative to this file. */
 async function resolveLayout() {
   const candidates = [
@@ -163,9 +263,12 @@ async function install() {
   console.log(`Wrote Fleet Supervisor settings to ${path.join(fleetHome, "config.json")}`);
   console.log(`Guard script: ${layout.guard}`);
 
+  // --- Upgrade hygiene: clear out anything an older install left behind ----
+  if (!process.argv.includes("--keep-legacy")) await removeLegacyArtifacts();
+
   console.log("");
   console.log("Done. Fully quit Paseo (including its daemon) and reopen it.");
-  console.log("Fleet Supervisor starts with Paseo and exits with it — no shortcut needed.");
+  console.log("Fleet Supervisor starts with Paseo and exits with it â€” no shortcut needed.");
   console.log("You will find its settings in Paseo's sidebar, and Skeptic Review in the composer.");
 }
 
@@ -177,8 +280,18 @@ async function uninstall() {
     return;
   }
   delete paseoConfig.plugins[PLUGIN_ID];
+  // Leaving `pluginsEnabled` set is harmless for a Paseo that understands it,
+  // but a Paseo without a plugin system refuses to start on unknown keys â€” so
+  // drop both once nothing is registered.
+  if (Object.keys(paseoConfig.plugins).length === 0) {
+    delete paseoConfig.plugins;
+    delete paseoConfig.pluginsEnabled;
+  }
   await writeJson(paseoConfigFile, paseoConfig);
   console.log(`Removed the ${PLUGIN_ID} plugin from ${paseoConfigFile}`);
+
+  if (!process.argv.includes("--keep-legacy")) await removeLegacyArtifacts();
+
   console.log("Settings and logs under ~/.paseo-fleet-guard were left alone.");
   console.log("Fully quit Paseo and reopen it to finish.");
 }
