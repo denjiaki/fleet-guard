@@ -166,6 +166,38 @@ powershell -ExecutionPolicy Bypass -File .\package-release.ps1
 
 The finished standalone EXE is written to `desktop/bin/`; the full ZIP is written to `release/`.
 
+### Running a patched Paseo build
+
+Native Council buttons and the plugin surface need Paseo built from source with
+`paseo-plugin-action-slots.patch` applied. Three things bite when you do that:
+
+1. **Close Paseo before packaging.** electron-builder clears its output
+   directory, and Windows will not let it delete a running `Paseo.exe`. The
+   failure looks unrelated — `app-builder.exe process failed
+   ERR_ELECTRON_BUILDER_CANNOT_EXECUTE` — but the real line above it is
+   `remove ...\Paseo.exe: Access is denied`.
+
+2. **Windows needs symlink privileges to build the installer.** electron-builder
+   extracts a code-signing toolchain containing macOS symlinks and fails with
+   `Cannot create symbolic link : A required privilege is not held by the
+   client`. Enable Developer Mode (Settings → System → For developers), or run
+   the packaging step elevated. Only the installer needs this; `win-unpacked` is
+   produced fine without it, and a shortcut to it works identically.
+
+3. **Delete `resources/app-update.yml`, or the patch will silently undo itself.**
+   The generated build points its auto-updater at upstream `getpaseo/paseo`. If
+   it ever updates, the patched build is replaced by stock Paseo, which has no
+   plugin system — and Paseo then refuses to start at all, because a config
+   containing `pluginsEnabled`/`plugins` fails its strict schema:
+
+   ```
+   [Config] Invalid config in ~/.paseo/config.json:
+     - : Unrecognized keys: "pluginsEnabled", "plugins"
+   ```
+
+   Running from `win-unpacked` with the updater file removed avoids this
+   entirely, which is why a shortcut is preferred over installing.
+
 ## License
 
 Fleet Guard is available under the [MIT License](LICENSE). It is an independent community utility and is not affiliated with Anthropic, OpenAI, Google, Cursor, GitHub, or Paseo.
