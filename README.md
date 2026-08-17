@@ -20,13 +20,18 @@
 
 Fleet Guard watches a root Claude Code task inside [Paseo](https://paseo.sh/). When Claude reports a real session or quota limit, Fleet Supervisor hands the same workspace and task context to the exact provider **and model** you chose—including another Claude model or a model running locally on your PC. It can nudge an unfinished agent, check a premature completion claim, cycle through fallbacks, and return the work to the original Claude task after a cooldown.
 
-Version 4 also adds a model Council to Paseo itself: **Skeptic Review** in the composer reviews the latest task context, while the brain icon beneath a message reviews that specific message and its attachments. The configured reviewers run independently and in parallel, then the original task receives their conclusions and writes one digest.
+Version 4 also adds multi-model review to Paseo itself: **Skeptic Review** in the composer reviews the latest task context, while the consensus icon beneath a message reviews that specific message and its attachments. The configured reviewers run independently and in parallel, then the original task receives their conclusions and writes one digest. These buttons need a Paseo built from source — see [You need a Paseo built from source](#you-need-a-paseo-built-from-source).
 
 It does **not** bypass limits or share accounts. Every fallback uses its own official CLI, login, permissions, subscription, and quota.
 
-## A setup wizard instead of a config file
+## Settings inside Paseo, not a config file
 
-The Windows setup app finds the providers already available on the computer, offers friendly **Get** and **Verify** controls, asks Paseo for each provider's current model catalog, and lets the user choose an exact model, priority, model-specific role, Council lens, and continuation policy. Model fields remain editable when a CLI cannot publish a catalog.
+Fleet Supervisor's settings are a Paseo surface, opened from Paseo's sidebar. It
+asks Paseo for each provider's current model catalog and lets you choose an exact
+model, priority, model-specific role, review lens, and continuation policy —
+every key the guard reads. Changes save straight to disk and the running guard
+picks them up, so nothing has to be reinstalled to change a setting. Model fields
+remain editable when a CLI cannot publish a catalog.
 
 <p align="center">
   <img src="docs/assets/provider-setup.png" width="860" alt="Fleet Guard provider setup screen">
@@ -42,9 +47,12 @@ The Windows setup app finds the providers already available on the computer, off
 - Route Fable's separate weekly allowance to another selected Claude model before leaving Anthropic, or skip that step and move directly to another provider/model.
 - Select exact models instead of only choosing a provider family.
 - Give every automatic-handoff model a built-in role—progress reporting, bug checking, QA, or skepticism—or a custom highest-priority system prompt.
-- Configure an independent Council roster and review lens for each exact model; Council prompts never inherit automatic-handoff instructions.
+- Configure an independent Skeptic Review roster and review lens for each exact model; review prompts never inherit automatic-handoff instructions.
 - Review the latest task context from Paseo's **Skeptic Review** composer button.
-- Review one user or assistant message, including uploaded PDFs and file attachments, from the brain icon beneath that message.
+- Review one user or assistant message, including uploaded PDFs and file attachments, from the consensus icon beneath that message.
+- Turn automatic handoff on and off from the **Fleet Supervisor** button in Paseo's composer toolbar, which shows its own state: green while watching, red and greyed when off.
+- Hand the current task to the fleet yourself with the **Hand off** button, without waiting for a quota limit.
+- Edit every setting inside Paseo — general switches, continuation policy, fallback order, reviewers, and the local model — on the Fleet Supervisor plugin surface. The installer never needs reopening.
 - Keep Codex, local-model, Cursor, and Copilot handoffs visible as child tasks in the same Paseo workspace.
 - Prioritize providers in any order.
 - Nudge the same unfinished child agent instead of constantly creating replacements.
@@ -52,20 +60,41 @@ The Windows setup app finds the providers already available on the computer, off
 - Reuse child sessions on later cycles so their conversational context survives.
 - Return to the original Claude task after a configurable cooldown.
 - Resume a recent interrupted continuation chain after Paseo is reopened.
-- Stay out of Alt+Tab and the taskbar through a native windowless launcher.
+- Start automatically with Paseo. The plugin launches the guard, so there is no separate launcher, shortcut, or console command to run.
 - Exit completely when Paseo's daemon is gone. There is no Windows-login service or permanent watchdog.
 
 ## Getting started
 
-1. Download the standalone `FleetGuardSetup.exe` from the [v4.0.0 beta 1 release](https://github.com/denjiaki/fleet-guard/releases/tag/v4.0.0-beta.1). A traditional ZIP is available on the same release page if you prefer it.
-2. Double-click the downloaded installer—there is nothing else to extract or keep beside it.
-3. Follow the provider cards and finish any requested CLI sign-ins.
-4. Choose your fallback priority and continuation policy.
-5. From then on, start Paseo with **Fleet Supervisor - On Paseo** from the Desktop or Start Menu.
+1. Install the Fleet Supervisor plugin and guard with the cross-platform setup script:
 
-The Council buttons require the Fleet Supervisor Paseo build, which extends Paseo's official plugin API with native composer and message action slots. The change is implemented in the companion `fleet-supervisor-ui` Paseo branch and does not use DOM injection. Stock Paseo 0.4.0 can still run automatic handoffs, but it cannot render these two new plugin actions.
+   ```bash
+   node payload/setup.mjs
+   ```
 
-Windows may show an **Unknown publisher** warning because this community beta is not code-signed. The complete C# and JavaScript source is here for review.
+2. Finish any requested provider CLI sign-ins.
+3. Start Paseo. The plugin starts Fleet Supervisor itself — there is no separate launcher or console command.
+4. Open **Fleet Supervisor** from Paseo's sidebar to set your fallback order, reviewers, and continuation policy.
+
+### You need a Paseo built from source
+
+**This is the one real prerequisite, and there is no way around it today.** Every
+user interface piece — the Skeptic Review and Fleet Supervisor buttons, and the
+settings surface itself — is a Paseo plugin, and **no released Paseo has a plugin
+system**. Plugin support landed on upstream `main` on 2026-08-14, the day *after*
+v0.4.0 shipped, and is still being reworked.
+
+Checked against tag `v0.4.0`: there is no `packages/server/src/server/plugins`
+directory at all. A stock 0.4.0 install cannot render these buttons, cannot show
+the settings surface, and will **refuse to start entirely** if its config
+contains the `plugins` keys, because its config schema rejects unknown keys.
+
+Until plugin support reaches a release, build Paseo from source with
+`paseo-plugin-action-slots.patch` applied — see
+[Running a patched Paseo build](#running-a-patched-paseo-build). Automatic
+handoff itself does not depend on any of this: the guard talks to Paseo's daemon
+over its normal WebSocket API and works against a stock Paseo.
+
+Windows may show an **Unknown publisher** warning because this community beta is not code-signed. The complete source is here for review.
 
 ### Requirements
 
@@ -111,12 +140,21 @@ Each fallback card contains an editable model picker populated through Paseo's p
 
 When the watched source is Fable, the optional **Next Claude model** node can route a Fable allowance stop to another Anthropic model before the cross-provider list begins. For other Claude source models, setup explains that there is no separate Fable-style weekly allowance; normal account, session, and provider limits can still move the chain forward.
 
-## Council reviews inside Paseo
+## Skeptic Review inside Paseo
 
-Council membership is configured separately from fallback behavior. Enabling a model as a Council reviewer reveals a Council-only lens: strengths and weaknesses, bug checking, QA, progress audit, or a custom review prompt.
+Reviewers are configured separately from fallback behavior, under **Skeptic
+Review** on the settings surface. Enabling a model as a reviewer reveals a
+review-only lens: strengths and weaknesses, bug checking, QA, progress audit, or
+a custom review prompt.
 
-- **Skeptic Review** sends the latest projected task context to every selected reviewer.
-- The brain icon beneath a message sends only that message plus supported attachments and images.
+> **Leaving the reviewer list empty does not mean "no reviewers."** Fleet
+> Supervisor then borrows the first three usable entries from your fallback
+> order. The settings surface names them so this is visible, flags any provider
+> Paseo does not have installed, and offers a one-click way to make the
+> inherited list explicit and editable.
+
+- **Skeptic Review** in the composer sends the latest projected task context to every selected reviewer.
+- The consensus icon beneath a message sends only that message plus supported attachments and images.
 - Reviewers are created as parallel child tasks with review-only instructions and a structured response contract.
 - Results return to the original task, which reconciles agreement and disagreement into one user-facing digest.
 
@@ -156,19 +194,24 @@ Fleet-created Cursor tasks use an unattended provider profile. Codex uses auto-r
 
 ## Build and test from source
 
-The desktop interface and windowless launcher target .NET Framework 4.5.2. The continuation engine uses Node.js 22+. The build embeds the complete runtime payload and Fleet Supervisor Paseo plugin into the setup executable, so the resulting EXE works by itself. Native Council buttons additionally require the companion Paseo UI branch until the action-slot extension is upstreamed.
+The continuation engine and the ACP adapter use Node.js 22+. What ships is a
+plugin directory, a Node script, and a cross-platform setup script — there is no
+native compilation step, and the legacy C# launcher and setup app under
+`desktop/` are no longer part of the install path.
 
-```powershell
+```bash
 npm ci --prefix payload
 npm test --prefix payload
-powershell -ExecutionPolicy Bypass -File .\package-release.ps1
+node payload/setup.mjs
 ```
 
-The finished standalone EXE is written to `desktop/bin/`; the full ZIP is written to `release/`.
+The buttons and settings surface additionally require a Paseo built from source
+with `paseo-plugin-action-slots.patch` applied, until plugin support reaches a
+Paseo release.
 
 ### Running a patched Paseo build
 
-Native Council buttons and the plugin surface need Paseo built from source with
+The Skeptic Review buttons and the plugin surface need Paseo built from source with
 `paseo-plugin-action-slots.patch` applied. Three things bite when you do that:
 
 1. **Close Paseo before packaging.** electron-builder clears its output

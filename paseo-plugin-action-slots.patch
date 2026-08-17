@@ -1,10 +1,10 @@
-From 34028d0d5b38a454bb0fec9151bf7ddce1df2ae3 Mon Sep 17 00:00:00 2001
+From e9c73d8bbb37e41322887277c7ff56d87a137972 Mon Sep 17 00:00:00 2001
 From: denjiaki <106935517+denjiaki@users.noreply.github.com>
 Date: Mon, 17 Aug 2026 12:15:22 -0700
-Subject: [PATCH] Add plugin action slots, action state, and fix
- packaged-Windows plugin loading
+Subject: [PATCH] Add plugin action slots, action state, and fix plugin loading
+ in packaged builds
 
-Three related changes to Paseo's plugin system.
+Four related changes to Paseo's plugin system.
 
 1. Composer and message action slots
 
@@ -20,18 +20,34 @@ Three related changes to Paseo's plugin system.
    control to `role="switch"` with `checked` so screen readers announce on/off.
    Actions without the contract stay neutral, so this is backward compatible.
 
-3. Packaged Windows builds could not load plugins at all
+3. Packaged builds could not spawn esbuild
 
    The daemon compiles plugins with esbuild, which spawns a native binary.
    electron-builder unpacks that binary to `app.asar.unpacked`, but esbuild
    resolves it relative to its own module path inside `app.asar`, and a binary
-   cannot be executed from an asar archive. Every plugin failed to load with
-   `spawn ...\esbuild.exe ENOENT`, surfacing as a plugin stuck in `failed`
-   rather than as an obvious packaging error.
+   cannot be executed from an asar archive. Plugins failed with
+   `spawn ...esbuild.exe ENOENT`. `resolvePackagedEsbuildBinaryPath` locates the
+   unpacked binary and the daemon env sets `ESBUILD_BINARY_PATH`, esbuild's
+   supported override. An explicit value from the environment still wins.
 
-   `resolvePackagedEsbuildBinaryPath` locates the unpacked binary and the
-   daemon env sets `ESBUILD_BINARY_PATH`, esbuild's supported override. An
-   explicit value from the environment still wins.
+4. Installed builds could not load ANY plugin
+
+   `plugin-process.ts` imported `@paseo/plugin` for `defineRpc` and
+   `defineAttachmentSource`. Both are React-free, but the package root also
+   re-exports `useRpc` from `rpc-context.js`, which imports the `react` peer
+   dependency. React is not in the daemon's packaged dependency tree, so every
+   plugin died during initialization with:
+
+     ERR_MODULE_NOT_FOUND: Cannot find package 'react' imported from
+       .../app.asar/node_modules/@paseo/plugin/dist/rpc-context.js
+
+   This hides during development: a build that lives inside the repo resolves
+   react from the workspace root by walking up parent directories. It only
+   reproduces once the app is installed somewhere with no node_modules above it.
+
+   Adds a React-free `@paseo/plugin/server` entry exporting just those two, and
+   points the daemon at it. `useRpc` is still exported from the root, so plugin
+   authors are unaffected.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
@@ -50,14 +66,20 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  packages/app/src/plugins/types.ts             |   6 +
  packages/cli/src/commands/plugin/scaffold.ts  |  16 +
  packages/desktop/src/daemon/runtime-paths.ts  |  41 ++-
+ packages/plugin/package.json                  |   5 +
  packages/plugin/src/contracts.ts              |  26 ++
+ .../plugin/src/define-attachment-source.ts    |  12 +
  packages/plugin/src/host.ts                   |  21 +-
- packages/plugin/src/index.ts                  |   2 +
+ packages/plugin/src/index.ts                  |  12 +-
+ packages/plugin/src/server.ts                 |  23 ++
  .../server/src/server/plugins/compiler.ts     |   8 +-
+ .../src/server/plugins/plugin-process.ts      |  10 +-
  .../src/server/plugins/runtime.posix.test.ts  |   3 +
- 20 files changed, 847 insertions(+), 24 deletions(-)
+ 24 files changed, 899 insertions(+), 32 deletions(-)
  create mode 100644 packages/app/src/plugins/actions.test.tsx
  create mode 100644 packages/app/src/plugins/actions.tsx
+ create mode 100644 packages/plugin/src/define-attachment-source.ts
+ create mode 100644 packages/plugin/src/server.ts
 
 diff --git a/docs/plugins.md b/docs/plugins.md
 index a59cb99..74c1188 100644
@@ -1233,6 +1255,22 @@ index 70c9840..54b5d37 100644
 +  const esbuildBinaryPath = resolvePackagedEsbuildBinaryPath();
 +  return esbuildBinaryPath ? { ...baseEnv, ESBUILD_BINARY_PATH: esbuildBinaryPath } : baseEnv;
 +}
+diff --git a/packages/plugin/package.json b/packages/plugin/package.json
+index 586658f..08fb453 100644
+--- a/packages/plugin/package.json
++++ b/packages/plugin/package.json
+@@ -17,6 +17,11 @@
+       "types": "./dist/host.d.ts",
+       "source": "./src/host.ts",
+       "default": "./dist/host.js"
++    },
++    "./server": {
++      "types": "./dist/server.d.ts",
++      "source": "./src/server.ts",
++      "default": "./dist/server.js"
+     }
+   },
+   "scripts": {
 diff --git a/packages/plugin/src/contracts.ts b/packages/plugin/src/contracts.ts
 index b05fa3e..c46cf84 100644
 --- a/packages/plugin/src/contracts.ts
@@ -1277,6 +1315,24 @@ index b05fa3e..c46cf84 100644
  }
  
  export type PluginCleanup = () => void;
+diff --git a/packages/plugin/src/define-attachment-source.ts b/packages/plugin/src/define-attachment-source.ts
+new file mode 100644
+index 0000000..ed5afc6
+--- /dev/null
++++ b/packages/plugin/src/define-attachment-source.ts
+@@ -0,0 +1,12 @@
++import type { PluginAttachmentSourceContribution } from "./contracts.js";
++
++/**
++ * Lives in its own module so both the package root and the React-free
++ * `@paseo/plugin/server` entry can export it without either pulling in the
++ * other's dependencies. See the comment in `server.ts`.
++ */
++export function defineAttachmentSource<Definition extends PluginAttachmentSourceContribution>(
++  definition: Definition,
++): Definition {
++  return definition;
++}
 diff --git a/packages/plugin/src/host.ts b/packages/plugin/src/host.ts
 index dd1454d..f90e296 100644
 --- a/packages/plugin/src/host.ts
@@ -1335,10 +1391,10 @@ index dd1454d..f90e296 100644
  }
  
 diff --git a/packages/plugin/src/index.ts b/packages/plugin/src/index.ts
-index 7591d34..0711bb6 100644
+index 7591d34..218b0d9 100644
 --- a/packages/plugin/src/index.ts
 +++ b/packages/plugin/src/index.ts
-@@ -6,9 +6,11 @@ export {
+@@ -6,19 +6,17 @@ export {
  } from "./attachments.js";
  export type {
    PluginAttachmentSourceContribution,
@@ -1350,6 +1406,48 @@ index 7591d34..0711bb6 100644
    PluginSidebarContribution,
    PluginSurfaceContribution,
    PluginSurfaceProps,
+ } from "./contracts.js";
+-import type { PluginAttachmentSourceContribution } from "./contracts.js";
+ export { useRpc } from "./rpc-context.js";
+ export { defineRpc, type PluginRpcContract } from "./rpc.js";
+-
+-export function defineAttachmentSource<Definition extends PluginAttachmentSourceContribution>(
+-  definition: Definition,
+-): Definition {
+-  return definition;
+-}
++// Re-exported rather than defined here so `@paseo/plugin/server` can offer it
++// without evaluating `rpc-context.js` and its `react` peer dependency.
++export { defineAttachmentSource } from "./define-attachment-source.js";
+diff --git a/packages/plugin/src/server.ts b/packages/plugin/src/server.ts
+new file mode 100644
+index 0000000..b6c2264
+--- /dev/null
++++ b/packages/plugin/src/server.ts
+@@ -0,0 +1,23 @@
++/**
++ * React-free surface of `@paseo/plugin`, for the daemon.
++ *
++ * The daemon's plugin host (`plugin-process.ts`) needs only `defineRpc` and
++ * `defineAttachmentSource`, neither of which touches React. Importing the
++ * package root to get them also evaluates `rpc-context.js`, which imports
++ * `react` — a *peer* dependency, present in the app but not in the daemon's
++ * packaged dependency tree. In a packaged build that fails at load with:
++ *
++ *   ERR_MODULE_NOT_FOUND: Cannot find package 'react' imported from
++ *     .../app.asar/node_modules/@paseo/plugin/dist/rpc-context.js
++ *
++ * and every plugin dies with "exited during initialization".
++ *
++ * This is easy to miss when developing, because a build that lives inside the
++ * repo resolves `react` from the workspace root by walking up parent
++ * directories. Only a build installed elsewhere — with no `node_modules` above
++ * it — actually exercises the failure.
++ *
++ * Plugin authors are unaffected: `useRpc` is still exported from the root.
++ */
++export { defineRpc, type PluginRpcContract } from "./rpc.js";
++export { defineAttachmentSource } from "./define-attachment-source.js";
 diff --git a/packages/server/src/server/plugins/compiler.ts b/packages/server/src/server/plugins/compiler.ts
 index 1726f10..2411680 100644
 --- a/packages/server/src/server/plugins/compiler.ts
@@ -1369,6 +1467,26 @@ index 1726f10..2411680 100644
  };
  
  function registrationName(statement: unknown, contextName: string): string | null {
+diff --git a/packages/server/src/server/plugins/plugin-process.ts b/packages/server/src/server/plugins/plugin-process.ts
+index 8c54183..397fa78 100644
+--- a/packages/server/src/server/plugins/plugin-process.ts
++++ b/packages/server/src/server/plugins/plugin-process.ts
+@@ -1,6 +1,14 @@
+ import type { PluginProcessMessage, PluginProcessRequest } from "./plugin-process-protocol.js";
+ import { createRequire } from "node:module";
+-import { defineAttachmentSource, defineRpc, type PluginRpcContract } from "@paseo/plugin";
++// `@paseo/plugin/server`, not the package root. The root re-exports `useRpc`
++// from `rpc-context.js`, which imports the `react` peer dependency. React is
++// not in the daemon's packaged dependency tree, so importing the root makes
++// EVERY plugin fail to load in an installed build:
++//   ERR_MODULE_NOT_FOUND: Cannot find package 'react' imported from
++//     .../app.asar/node_modules/@paseo/plugin/dist/rpc-context.js
++// A build that lives inside the repo hides this by resolving react from the
++// workspace root, so it only reproduces once installed somewhere else.
++import { defineAttachmentSource, defineRpc, type PluginRpcContract } from "@paseo/plugin/server";
+ 
+ type RpcHandler = (input: unknown) => unknown | Promise<unknown>;
+ 
 diff --git a/packages/server/src/server/plugins/runtime.posix.test.ts b/packages/server/src/server/plugins/runtime.posix.test.ts
 index 8a1c07b..aa4db55 100644
 --- a/packages/server/src/server/plugins/runtime.posix.test.ts
