@@ -1,6 +1,6 @@
 {
   "name": "paseo-fleet-guard",
-  "version": "3.2.0-beta.1",
+  "version": "4.0.0-beta.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,9 @@
     "test": "node --test --test-isolation=none tests/continuation-engine.test.mjs"
   },
   "dependencies": {
-    "@getpaseo/client": "0.4.0"
+    "@agentclientprotocol/sdk": "^0.17.1",
+    "@getpaseo/client": "0.4.0",
+    "zod": "^4.4.3"
   },
   "engines": {
     "node": ">=22"

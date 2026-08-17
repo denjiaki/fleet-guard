@@ -162,6 +162,87 @@ test("starts a configured local model through the Fleet OpenCode provider", asyn
   assert.equal(guard.__getFleetGuardTestState().handled[key].status, "complete");
 });
 
+test("uses the exact configured model and highest-priority behavior prompt", async () => {
+  const rootId = "root-model-prompt";
+  const mock = mockClient({ rootId, childResults: [verdict("complete")] });
+  const key = "failure-model-prompt";
+  guard.__setFleetGuardTestRuntime({
+    client: mock.api,
+    config: {
+      fallbackOrder: [{
+        id: "codex-sol",
+        kind: "paseo",
+        provider: "codex/gpt-5.6-sol",
+        modeId: "auto-review",
+        useFor: "bug-checking",
+        systemPrompt: "Pay special attention to concurrency regressions.",
+      }],
+      continuationPolicy: { mode: "single-pass", sameAgentNudges: 0, verifyCompletion: false },
+    },
+    state: { version: 2, handled: { [key]: { rootAgentId: rootId, handledAt: new Date().toISOString(), status: "handling" } } },
+  });
+
+  await guard.performFailover(rootId, "quota", key);
+  assert.equal(mock.calls.createOptions[0].provider, "codex");
+  assert.equal(mock.calls.createOptions[0].model, "gpt-5.6-sol");
+  assert.match(mock.calls.createOptions[0].systemPrompt, /MODEL-SPECIFIC DIRECTIVE \(highest priority/);
+  assert.match(mock.calls.createOptions[0].systemPrompt, /dedicated bug checker/i);
+  assert.match(mock.calls.createOptions[0].systemPrompt, /concurrency regressions/i);
+});
+
+test("runs configured council models independently and returns their digest request to the source", async () => {
+  const rootId = "root-council";
+  const review = (summary) => ({
+    status: "idle",
+    error: null,
+    lastMessage: JSON.stringify({
+      summary,
+      strengths: ["clear intent"],
+      risks: ["missing evidence"],
+      recommendations: ["add a focused test"],
+      confidence: "high",
+    }),
+  });
+  const mock = mockClient({ rootId, childResults: [review("Sol review"), review("Opus review")] });
+  const imagePath = path.join(testHome, "council-image.png");
+  await fs.writeFile(imagePath, Buffer.from("fleet-image"));
+  guard.__setFleetGuardTestRuntime({
+    client: mock.api,
+    config: {
+      council: {
+        enabled: true,
+        members: [
+          { id: "sol", provider: "codex/gpt-5.6-sol", lens: "bug-checking" },
+          { id: "opus", provider: "claude/claude-opus", lens: "skepticism" },
+        ],
+      },
+    },
+    state: { version: 2, handled: {} },
+  });
+
+  await guard.runCouncilReview({
+    scope: "message",
+    agentId: rootId,
+    role: "user",
+    text: "Ship this design as-is.",
+    attachments: [{ type: "uploaded_file", name: "brief.pdf", path: "C:/brief.pdf" }],
+    images: [{ storageType: "desktop-file", storageKey: imagePath, mimeType: "image/png" }],
+  }, "review-test");
+
+  assert.equal(mock.calls.create, 2);
+  assert.deepEqual(mock.calls.createOptions.map((options) => [options.provider, options.model]), [
+    ["codex", "gpt-5.6-sol"],
+    ["claude", "claude-opus"],
+  ]);
+  assert.ok(mock.calls.createOptions.every((options) => /independent reviewer/i.test(options.systemPrompt)));
+  assert.ok(mock.calls.createOptions.every((options) => options.attachments?.[0]?.name === "brief.pdf"));
+  assert.ok(mock.calls.createOptions.every((options) => options.images?.[0]?.mimeType === "image/png"));
+  assert.equal(mock.calls.messages.at(-1).id, rootId);
+  assert.match(mock.calls.messages.at(-1).text, /INDEPENDENT REVIEWS/);
+  assert.match(mock.calls.messages.at(-1).text, /Sol review/);
+  assert.match(mock.calls.messages.at(-1).text, /Opus review/);
+});
+
 test.after(async () => {
   await fs.rm(testHome, { recursive: true, force: true });
 });

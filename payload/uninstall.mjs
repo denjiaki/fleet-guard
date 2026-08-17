@@ -50,13 +50,15 @@ if (fs.existsSync(paseoConfig)) {
     const parsed = JSON.parse(fs.readFileSync(paseoConfig, "utf8"));
     const hasFleetCursor = Boolean(parsed?.agents?.providers?.["fleet-cursor"]);
     const hasFleetLocal = Boolean(parsed?.agents?.providers?.["fleet-local"]);
-    if (hasFleetCursor || hasFleetLocal) {
+    const hasFleetSupervisorPlugin = Boolean(parsed?.plugins?.["fleet-supervisor"]);
+    if (hasFleetCursor || hasFleetLocal || hasFleetSupervisorPlugin) {
       const backup = paseoConfig + ".before-fleet-guard-uninstall";
       if (!fs.existsSync(backup)) fs.copyFileSync(paseoConfig, backup);
       if (hasFleetCursor) delete parsed.agents.providers["fleet-cursor"];
       if (hasFleetLocal) delete parsed.agents.providers["fleet-local"];
+      if (hasFleetSupervisorPlugin) delete parsed.plugins["fleet-supervisor"];
       fs.writeFileSync(paseoConfig, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-      console.log("Removed Fleet Guard's Cursor and local-model provider profiles from Paseo config.");
+      console.log("Removed Fleet Guard's Paseo controls and Fleet-only provider profiles.");
     }
   } catch (error) {
     console.warn(`Could not remove the Fleet-only Cursor provider: ${error.message}`);

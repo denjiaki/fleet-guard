@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $MyInvocation.MyCommand.Path
 $workspace = Split-Path -Parent (Split-Path -Parent $project)
 $releaseRoot = Join-Path $project 'release'
-$releaseName = 'Fleet Guard Friendly Setup v3.2.0 beta'
+$releaseName = 'Fleet Supervisor Friendly Setup v4.0.0 beta 1'
 $releaseDir = Join-Path $releaseRoot $releaseName
 $zipPath = Join-Path $releaseRoot ($releaseName + '.zip')
 
@@ -37,6 +37,7 @@ Copy-Item -LiteralPath (Join-Path $project 'desktop\FleetGuard.ico') -Destinatio
 Copy-Item -LiteralPath (Join-Path $project 'desktop\FleetGuard.png') -Destination $sourceOut
 Copy-Item -LiteralPath (Join-Path $project 'desktop\build.ps1') -Destination $sourceOut
 Copy-Item -LiteralPath (Join-Path $project 'payload\src') -Destination $sourceOut -Recurse
+Copy-Item -LiteralPath (Join-Path $project 'payload\fleet-supervisor-plugin') -Destination $sourceOut -Recurse
 Copy-Item -LiteralPath (Join-Path $project 'payload\install.mjs') -Destination $sourceOut
 Copy-Item -LiteralPath (Join-Path $project 'payload\uninstall.mjs') -Destination $sourceOut
 

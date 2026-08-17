@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
@@ -31,6 +32,14 @@ namespace FleetGuardSetup
 
     public sealed class ProviderInfo
     {
+        public ProviderInfo()
+        {
+            AvailableModels = new List<ModelChoice>();
+            UseFor = "";
+            CustomSystemPrompt = "";
+            CouncilLens = "skepticism";
+            CouncilSystemPrompt = "";
+        }
         public string Id;
         public string Name { get; set; }
         public string Monogram;
@@ -55,11 +64,25 @@ namespace FleetGuardSetup
         public string StatusText;
         public AuthKind AuthKind;
         public ProviderRow Row;
+        public List<ModelChoice> AvailableModels { get; set; }
+        public string SelectedModel { get; set; }
+        public bool UseForEnabled { get; set; }
+        public string UseFor { get; set; }
+        public string CustomSystemPrompt { get; set; }
+        public bool IncludeInCouncil { get; set; }
+        public string CouncilLens { get; set; }
+        public string CouncilSystemPrompt { get; set; }
 
         public bool CanUse
         {
             get { return Installed && (!AuthKnown || Authenticated); }
         }
+    }
+
+    public sealed class ModelChoice
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
     }
 
     public sealed class PolicyOption
@@ -72,7 +95,25 @@ namespace FleetGuardSetup
     public sealed class SavedWorker
     {
         public string id { get; set; }
+        public string kind { get; set; }
         public string provider { get; set; }
+        public string modeId { get; set; }
+        public string useFor { get; set; }
+        public string systemPrompt { get; set; }
+    }
+
+    public sealed class SavedCouncilMember
+    {
+        public string id { get; set; }
+        public string provider { get; set; }
+        public string lens { get; set; }
+        public string systemPrompt { get; set; }
+    }
+
+    public sealed class SavedCouncil
+    {
+        public bool enabled { get; set; }
+        public List<SavedCouncilMember> members { get; set; }
     }
 
     public sealed class SavedLocalModel
@@ -95,6 +136,9 @@ namespace FleetGuardSetup
         public List<SavedWorker> fallbackOrder { get; set; }
         public SavedContinuationPolicy continuationPolicy { get; set; }
         public SavedLocalModel localModel { get; set; }
+        public SavedCouncil council { get; set; }
+        public string sourceModel { get; set; }
+        public string claudeFallbackModel { get; set; }
     }
 
     public sealed class ProviderRow : Border
@@ -402,6 +446,239 @@ namespace FleetGuardSetup
         }
     }
 
+    public sealed class FallbackStepRow : Border
+    {
+        public ProviderInfo Provider { get; private set; }
+        public string ChosenModel { get { SaveModel(); return Provider.SelectedModel; } }
+        private readonly ComboBox modelBox;
+        private readonly ComboBox useForBox;
+        private readonly TextBox customPromptBox;
+        private readonly CheckBox councilCheck;
+        private readonly ComboBox councilLensBox;
+        private readonly TextBox councilPromptBox;
+        private readonly Border switchTrack;
+        private readonly Ellipse switchKnob;
+
+        public FallbackStepRow(ProviderInfo provider)
+        {
+            Provider = provider;
+            CornerRadius = new CornerRadius(17);
+            BorderBrush = BrushFrom("#E1E5EC");
+            BorderThickness = new Thickness(1);
+            Background = BrushFrom("#FBFCFE");
+            Padding = new Thickness(15, 12, 15, 12);
+            Margin = new Thickness(0, 0, 0, 9);
+
+            Grid root = new Grid();
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Child = root;
+
+            Grid header = new Grid();
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(260) });
+            StackPanel identity = new StackPanel();
+            identity.Children.Add(new TextBlock { Text = provider.Name, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = BrushFrom("#222731") });
+            identity.Children.Add(new TextBlock { Text = "Provider", FontSize = 9.5, Foreground = BrushFrom("#858C98"), Margin = new Thickness(0, 2, 0, 0) });
+            header.Children.Add(identity);
+
+            modelBox = new ComboBox
+            {
+                ItemsSource = provider.AvailableModels,
+                DisplayMemberPath = "Name",
+                SelectedValuePath = "Id",
+                IsEditable = true,
+                Height = 31,
+                Padding = new Thickness(8, 2, 8, 2),
+                FontSize = 10.5,
+                BorderBrush = BrushFrom("#DCE1EA"),
+                Background = Brushes.White,
+                ToolTip = "Choose an exact model reported by Paseo, or type a provider model ID."
+            };
+            if (!String.IsNullOrWhiteSpace(provider.SelectedModel)) modelBox.SelectedValue = provider.SelectedModel;
+            if (modelBox.SelectedIndex < 0 && provider.AvailableModels.Count > 0) modelBox.SelectedIndex = 0;
+            modelBox.SelectionChanged += delegate { SaveModel(); };
+            modelBox.LostKeyboardFocus += delegate { SaveModel(); };
+            Grid.SetColumn(modelBox, 1);
+            header.Children.Add(modelBox);
+            root.Children.Add(header);
+
+            Grid behavior = new Grid { Margin = new Thickness(0, 11, 0, 0) };
+            behavior.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            behavior.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
+            behavior.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            behavior.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel switchGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            switchGroup.Children.Add(new TextBlock { Text = "Use for:", FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = BrushFrom("#5F6774"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            switchTrack = new Border { Width = 39, Height = 22, CornerRadius = new CornerRadius(11), Cursor = Cursors.Hand, Padding = new Thickness(3) };
+            Grid switchGrid = new Grid();
+            switchGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            switchGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            switchKnob = new Ellipse { Width = 16, Height = 16, Fill = Brushes.White, Effect = new DropShadowEffect { BlurRadius = 4, ShadowDepth = 1, Opacity = 0.25 } };
+            switchGrid.Children.Add(switchKnob);
+            switchTrack.Child = switchGrid;
+            switchTrack.MouseLeftButtonDown += delegate { provider.UseForEnabled = !provider.UseForEnabled; RefreshBehavior(); };
+            switchGroup.Children.Add(switchTrack);
+            behavior.Children.Add(switchGroup);
+
+            useForBox = new ComboBox
+            {
+                ItemsSource = new List<PolicyOption>
+                {
+                    new PolicyOption { Name="Reporting progress", Value="reporting-progress" },
+                    new PolicyOption { Name="Bug checking", Value="bug-checking" },
+                    new PolicyOption { Name="QA", Value="qa" },
+                    new PolicyOption { Name="Skepticism", Value="skepticism" },
+                    new PolicyOption { Name="Custom system prompt", Value="custom" }
+                },
+                DisplayMemberPath = "Name",
+                Height = 29,
+                FontSize = 10.25,
+                Padding = new Thickness(7, 1, 7, 1),
+                Margin = new Thickness(12, 0, 8, 0),
+                BorderBrush = BrushFrom("#DCE1EA"),
+                Background = Brushes.White
+            };
+            useForBox.SelectionChanged += delegate
+            {
+                PolicyOption option = useForBox.SelectedItem as PolicyOption;
+                provider.UseFor = option == null ? "" : option.Value;
+                RefreshBehavior();
+            };
+            int selectedBehavior = 0;
+            for (int i = 0; i < useForBox.Items.Count; i++)
+            {
+                PolicyOption option = useForBox.Items[i] as PolicyOption;
+                if (option != null && option.Value == provider.UseFor) selectedBehavior = i;
+            }
+            useForBox.SelectedIndex = selectedBehavior;
+            Grid.SetColumn(useForBox, 1);
+            behavior.Children.Add(useForBox);
+
+            customPromptBox = new TextBox
+            {
+                Text = provider.CustomSystemPrompt ?? "",
+                Height = 29,
+                FontSize = 10.25,
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(0, 0, 8, 0),
+                BorderBrush = BrushFrom("#DCE1EA"),
+                Background = Brushes.White,
+                ToolTip = "This becomes the highest-priority model-specific system prompt on every Fleet handoff."
+            };
+            customPromptBox.TextChanged += delegate { provider.CustomSystemPrompt = customPromptBox.Text; };
+            Grid.SetColumn(customPromptBox, 2);
+            behavior.Children.Add(customPromptBox);
+
+            Grid councilBehavior = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            councilBehavior.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            councilBehavior.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
+            councilBehavior.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            councilCheck = new CheckBox
+            {
+                Content = "Council reviewer",
+                IsChecked = provider.IncludeInCouncil,
+                IsEnabled = provider.Id != "antigravity",
+                FontSize = 10.25,
+                Foreground = BrushFrom("#5F6774"),
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = provider.Id == "antigravity" ? "External Antigravity sessions cannot yet join a Paseo council." : "Use this exact model as an independent reviewer. Its Council lens is separate from its handoff role."
+            };
+            councilCheck.Checked += delegate { provider.IncludeInCouncil = true; RefreshCouncil(); };
+            councilCheck.Unchecked += delegate { provider.IncludeInCouncil = false; RefreshCouncil(); };
+            councilBehavior.Children.Add(councilCheck);
+
+            councilLensBox = new ComboBox
+            {
+                ItemsSource = new List<PolicyOption>
+                {
+                    new PolicyOption { Name="Strengths & weaknesses", Value="skepticism" },
+                    new PolicyOption { Name="Bug checking", Value="bug-checking" },
+                    new PolicyOption { Name="QA", Value="qa" },
+                    new PolicyOption { Name="Progress audit", Value="reporting-progress" },
+                    new PolicyOption { Name="Custom Council prompt", Value="custom" }
+                },
+                DisplayMemberPath = "Name",
+                Height = 29,
+                FontSize = 10.25,
+                Padding = new Thickness(7, 1, 7, 1),
+                Margin = new Thickness(12, 0, 8, 0),
+                BorderBrush = BrushFrom("#DCE1EA"),
+                Background = Brushes.White,
+                ToolTip = "This lens applies only to Council reviews, never to automatic handoffs."
+            };
+            councilLensBox.SelectionChanged += delegate
+            {
+                PolicyOption option = councilLensBox.SelectedItem as PolicyOption;
+                provider.CouncilLens = option == null ? "skepticism" : option.Value;
+                RefreshCouncil();
+            };
+            int selectedCouncilLens = 0;
+            for (int i = 0; i < councilLensBox.Items.Count; i++)
+            {
+                PolicyOption option = councilLensBox.Items[i] as PolicyOption;
+                if (option != null && option.Value == provider.CouncilLens) selectedCouncilLens = i;
+            }
+            councilLensBox.SelectedIndex = selectedCouncilLens;
+            Grid.SetColumn(councilLensBox, 1);
+            councilBehavior.Children.Add(councilLensBox);
+
+            councilPromptBox = new TextBox
+            {
+                Text = provider.CouncilSystemPrompt ?? "",
+                Height = 29,
+                FontSize = 10.25,
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(0, 0, 8, 0),
+                BorderBrush = BrushFrom("#DCE1EA"),
+                Background = Brushes.White,
+                ToolTip = "A Council-only review instruction. It cannot tell this model to continue the shared task."
+            };
+            councilPromptBox.TextChanged += delegate { provider.CouncilSystemPrompt = councilPromptBox.Text; };
+            Grid.SetColumn(councilPromptBox, 2);
+            councilBehavior.Children.Add(councilPromptBox);
+
+            Grid.SetRow(behavior, 1);
+            root.Children.Add(behavior);
+            Grid.SetRow(councilBehavior, 2);
+            root.Children.Add(councilBehavior);
+            RefreshBehavior();
+            RefreshCouncil();
+            SaveModel();
+        }
+
+        private void SaveModel()
+        {
+            ModelChoice choice = modelBox.SelectedItem as ModelChoice;
+            string value = choice == null ? modelBox.Text : choice.Id;
+            Provider.SelectedModel = String.IsNullOrWhiteSpace(value) || value == "__default" ? "" : value.Trim();
+        }
+
+        private void RefreshBehavior()
+        {
+            Grid grid = switchKnob.Parent as Grid;
+            if (grid != null) Grid.SetColumn(switchKnob, Provider.UseForEnabled ? 1 : 0);
+            switchKnob.HorizontalAlignment = Provider.UseForEnabled ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+            switchTrack.Background = BrushFrom(Provider.UseForEnabled ? "#6878DF" : "#CDD2DB");
+            useForBox.Visibility = Provider.UseForEnabled ? Visibility.Visible : Visibility.Collapsed;
+            customPromptBox.Visibility = Provider.UseForEnabled && Provider.UseFor == "custom" ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void RefreshCouncil()
+        {
+            bool enabled = Provider.IncludeInCouncil && Provider.Id != "antigravity";
+            councilLensBox.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+            councilPromptBox.Visibility = enabled && Provider.CouncilLens == "custom" ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private static SolidColorBrush BrushFrom(string value)
+        {
+            return (SolidColorBrush)new BrushConverter().ConvertFromString(value);
+        }
+    }
+
     public sealed class MainWindow : Window
     {
         private readonly List<ProviderInfo> providers;
@@ -426,6 +703,12 @@ namespace FleetGuardSetup
         private readonly CheckBox reuseSessionsBox;
         private readonly Border continuationPolicyCard;
         private readonly List<string> preferredProviderOrder;
+        private readonly ComboBox claudeSourceModelBox;
+        private readonly ComboBox claudeFallbackModelBox;
+        private readonly CheckBox claudeFallbackBox;
+        private readonly TextBlock claudeCapNote;
+        private ProviderInfo claudeFallbackProvider;
+        private FallbackStepRow claudeFallbackStep;
         private bool hasExistingGuardConfig;
         private int currentStep;
         private bool scanning;
@@ -434,6 +717,13 @@ namespace FleetGuardSetup
         private string installedGuidePath;
         private string localEndpoint;
         private string localModel;
+        private string savedSourceModel;
+        private string savedClaudeFallbackModel;
+        private string savedClaudeFallbackUseFor;
+        private string savedClaudeFallbackSystemPrompt;
+        private string savedClaudeFallbackCouncilLens;
+        private string savedClaudeFallbackCouncilSystemPrompt;
+        private bool savedClaudeFallbackInCouncil;
 
         private static SolidColorBrush B(string value)
         {
@@ -464,6 +754,13 @@ namespace FleetGuardSetup
             installProgress = new ProgressBar();
             installStatus = new TextBlock();
             preferredProviderOrder = new List<string>();
+            claudeSourceModelBox = ModelBox();
+            claudeFallbackModelBox = ModelBox();
+            claudeFallbackBox = new CheckBox { Content="Try another Claude model before leaving Anthropic", FontSize=10.5, Foreground=B("#594B45") };
+            claudeCapNote = new TextBlock { FontSize=10, Foreground=B("#806B61"), TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0, 5, 0, 0) };
+            claudeSourceModelBox.SelectionChanged += delegate { RefreshClaudeCapNote(); };
+            claudeFallbackBox.Checked += delegate { claudeFallbackModelBox.IsEnabled = true; RefreshClaudeFallbackStep(); };
+            claudeFallbackBox.Unchecked += delegate { claudeFallbackModelBox.IsEnabled = false; RefreshClaudeFallbackStep(); };
             continuationModeBox = ChoiceBox(new []
             {
                 new PolicyOption { Name="Return to Claude", Value="return-to-source" },
@@ -676,11 +973,56 @@ namespace FleetGuardSetup
                 {
                     foreach (SavedWorker worker in saved.fallbackOrder)
                     {
-                        if (worker != null && !String.IsNullOrWhiteSpace(worker.id) && !preferredProviderOrder.Contains(worker.id)) preferredProviderOrder.Add(worker.id);
+                        string providerId = ProviderIdForWorker(worker);
+                        if (!String.IsNullOrWhiteSpace(providerId) && providerId != "claude" && !preferredProviderOrder.Contains(providerId)) preferredProviderOrder.Add(providerId);
+                        if (providerId == "claude")
+                        {
+                            savedClaudeFallbackModel = ModelIdForWorker(worker);
+                            savedClaudeFallbackUseFor = worker == null ? "" : worker.useFor ?? "";
+                            savedClaudeFallbackSystemPrompt = worker == null ? "" : worker.systemPrompt ?? "";
+                            continue;
+                        }
+                        ProviderInfo configuredProvider = providers.FirstOrDefault(delegate(ProviderInfo candidate) { return candidate.Id == providerId; });
+                        if (configuredProvider != null)
+                        {
+                            configuredProvider.Selected = true;
+                            configuredProvider.SelectedModel = ModelIdForWorker(worker);
+                            configuredProvider.UseForEnabled = !String.IsNullOrWhiteSpace(worker.useFor) || !String.IsNullOrWhiteSpace(worker.systemPrompt);
+                            configuredProvider.UseFor = worker.useFor ?? "";
+                            configuredProvider.CustomSystemPrompt = worker.systemPrompt ?? "";
+                        }
                         if (worker != null && worker.id == "local" && String.IsNullOrWhiteSpace(localModel) && !String.IsNullOrWhiteSpace(worker.provider))
                         {
                             const string prefix = "fleet-local/fleet-local-api/";
                             if (worker.provider.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) localModel = worker.provider.Substring(prefix.Length);
+                        }
+                    }
+                }
+                savedSourceModel = saved == null ? "" : saved.sourceModel;
+                savedClaudeFallbackModel = saved == null ? "" : saved.claudeFallbackModel;
+                if (String.IsNullOrWhiteSpace(savedClaudeFallbackModel) && saved != null && saved.fallbackOrder != null)
+                {
+                    SavedWorker claudeFallback = saved.fallbackOrder.FirstOrDefault(delegate(SavedWorker worker) { return ProviderIdForWorker(worker) == "claude"; });
+                    if (claudeFallback != null) savedClaudeFallbackModel = ModelIdForWorker(claudeFallback);
+                }
+                if (saved != null && saved.council != null && saved.council.members != null)
+                {
+                    foreach (SavedCouncilMember member in saved.council.members)
+                    {
+                        string providerId = ProviderIdForSpec(member == null ? "" : member.provider);
+                        if (providerId == "claude")
+                        {
+                            savedClaudeFallbackInCouncil = true;
+                            savedClaudeFallbackCouncilLens = String.IsNullOrWhiteSpace(member.lens) ? "skepticism" : member.lens;
+                            savedClaudeFallbackCouncilSystemPrompt = member.systemPrompt ?? "";
+                            continue;
+                        }
+                        ProviderInfo configuredProvider = providers.FirstOrDefault(delegate(ProviderInfo candidate) { return candidate.Id == providerId; });
+                        if (configuredProvider != null)
+                        {
+                            configuredProvider.IncludeInCouncil = true;
+                            configuredProvider.CouncilLens = String.IsNullOrWhiteSpace(member.lens) ? "skepticism" : member.lens;
+                            configuredProvider.CouncilSystemPrompt = member.systemPrompt ?? "";
                         }
                     }
                 }
@@ -715,6 +1057,30 @@ namespace FleetGuardSetup
                 hasExistingGuardConfig = false;
                 preferredProviderOrder.Clear();
             }
+        }
+
+        private static string ProviderIdForWorker(SavedWorker worker)
+        {
+            if (worker == null) return "";
+            if (worker.kind == "antigravity" || worker.id == "antigravity") return "antigravity";
+            return ProviderIdForSpec(worker.provider);
+        }
+
+        private static string ProviderIdForSpec(string spec)
+        {
+            string provider = String.Concat(spec ?? "");
+            int slash = provider.IndexOf('/');
+            if (slash >= 0) provider = provider.Substring(0, slash);
+            if (provider == "fleet-cursor") return "cursor";
+            if (provider == "fleet-local") return "local";
+            return provider;
+        }
+
+        private static string ModelIdForWorker(SavedWorker worker)
+        {
+            if (worker == null || String.IsNullOrWhiteSpace(worker.provider)) return "";
+            int slash = worker.provider.IndexOf('/');
+            return slash < 0 ? "" : worker.provider.Substring(slash + 1);
         }
 
         private static void SelectChoice(ComboBox box, string value, int? number)
@@ -844,14 +1210,68 @@ namespace FleetGuardSetup
             footerNote.Text = "Installed to your Windows account only";
 
             Border source = new Border { CornerRadius = new CornerRadius(16), Background = B("#F6EEE9"), BorderBrush = B("#E8D8CF"), BorderThickness = new Thickness(1), Padding = new Thickness(16, 12, 16, 12) };
+            StackPanel sourcePanel = new StackPanel();
             Grid sourceGrid = new Grid();
             sourceGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            sourceGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             sourceGrid.Children.Add(new TextBlock { Text = "Claude Code", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = B("#3E302A") });
             TextBlock watched = new TextBlock { Text = "WATCHED SOURCE", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = B("#9A6247"), VerticalAlignment = VerticalAlignment.Center };
             Grid.SetColumn(watched, 1);
-            sourceGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             sourceGrid.Children.Add(watched);
-            source.Child = sourceGrid;
+            sourcePanel.Children.Add(sourceGrid);
+
+            ProviderInfo claude = providers.FirstOrDefault(delegate(ProviderInfo provider) { return provider.Id == "claude"; });
+            List<ModelChoice> sourceModels = new List<ModelChoice> { new ModelChoice { Id="__auto", Name="Auto-detect active Claude model" } };
+            if (claude != null) sourceModels.AddRange(claude.AvailableModels.Where(delegate(ModelChoice model) { return model.Id != "__default"; }));
+            claudeSourceModelBox.ItemsSource = sourceModels;
+            claudeSourceModelBox.SelectedValue = String.IsNullOrWhiteSpace(savedSourceModel) ? "__auto" : savedSourceModel;
+            if (claudeSourceModelBox.SelectedIndex < 0) claudeSourceModelBox.SelectedIndex = 0;
+
+            List<ModelChoice> fallbackModels = claude == null ? new List<ModelChoice>() : claude.AvailableModels.Where(delegate(ModelChoice model) { return model.Id != "__default"; }).ToList();
+            if (fallbackModels.Count == 0) fallbackModels.Add(new ModelChoice { Id="", Name="Type an Anthropic model ID" });
+            claudeFallbackModelBox.ItemsSource = fallbackModels;
+            if (!String.IsNullOrWhiteSpace(savedClaudeFallbackModel)) claudeFallbackModelBox.SelectedValue = savedClaudeFallbackModel;
+            if (claudeFallbackModelBox.SelectedIndex < 0 && fallbackModels.Count > 0) claudeFallbackModelBox.SelectedIndex = 0;
+            claudeFallbackBox.IsChecked = !String.IsNullOrWhiteSpace(savedClaudeFallbackModel);
+            if (claudeFallbackProvider == null)
+            {
+                claudeFallbackProvider = new ProviderInfo
+                {
+                    Id="claude",
+                    Name="Next Claude model",
+                    Installed=true,
+                    Selected=true,
+                    SelectedModel=savedClaudeFallbackModel ?? "",
+                    UseForEnabled=!String.IsNullOrWhiteSpace(savedClaudeFallbackUseFor) || !String.IsNullOrWhiteSpace(savedClaudeFallbackSystemPrompt),
+                    UseFor=savedClaudeFallbackUseFor ?? "",
+                    CustomSystemPrompt=savedClaudeFallbackSystemPrompt ?? "",
+                    IncludeInCouncil=savedClaudeFallbackInCouncil,
+                    CouncilLens=String.IsNullOrWhiteSpace(savedClaudeFallbackCouncilLens) ? "skepticism" : savedClaudeFallbackCouncilLens,
+                    CouncilSystemPrompt=savedClaudeFallbackCouncilSystemPrompt ?? ""
+                };
+            }
+            claudeFallbackProvider.AvailableModels = fallbackModels;
+            if (String.IsNullOrWhiteSpace(claudeFallbackProvider.SelectedModel)) claudeFallbackProvider.SelectedModel = savedClaudeFallbackModel ?? "";
+            claudeFallbackStep = new FallbackStepRow(claudeFallbackProvider);
+
+            Grid sourceOptions = new Grid { Margin = new Thickness(0, 11, 0, 0) };
+            sourceOptions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            sourceOptions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            StackPanel sourceModel = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
+            sourceModel.Children.Add(new TextBlock { Text="Starting model", FontSize=9.5, FontWeight=FontWeights.SemiBold, Foreground=B("#77645B"), Margin=new Thickness(0, 0, 0, 4) });
+            sourceModel.Children.Add(claudeSourceModelBox);
+            sourceOptions.Children.Add(sourceModel);
+            StackPanel nextClaude = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
+            nextClaude.Children.Add(claudeFallbackBox);
+            nextClaude.Children.Add(new TextBlock { Text="Optional model-level step", FontSize=9.5, Foreground=B("#88746A"), Margin=new Thickness(0, 6, 0, 0) });
+            Grid.SetColumn(nextClaude, 1);
+            sourceOptions.Children.Add(nextClaude);
+            sourcePanel.Children.Add(sourceOptions);
+            sourcePanel.Children.Add(claudeFallbackStep);
+            sourcePanel.Children.Add(claudeCapNote);
+            source.Child = sourcePanel;
+            RefreshClaudeFallbackStep();
+            RefreshClaudeCapNote();
             body.Children.Add(source);
             body.Children.Add(new TextBlock { Text = "\u2193", FontSize = 17, Foreground = B("#A4A9B3"), Margin = new Thickness(20, 6, 0, 6) });
 
@@ -861,15 +1281,18 @@ namespace FleetGuardSetup
                     int configuredIndex = preferredProviderOrder.IndexOf(p.Id);
                     return configuredIndex >= 0 ? configuredIndex : 1000 + providers.IndexOf(p);
                 }).ToList();
+            if (!selected.Any(delegate(ProviderInfo provider) { return provider.IncludeInCouncil; }))
+            {
+                foreach (ProviderInfo provider in selected.Where(delegate(ProviderInfo value) { return value.Id != "antigravity"; }).Take(3)) provider.IncludeInCouncil = true;
+            }
             chainList.Items.Clear();
-            foreach (ProviderInfo provider in selected) chainList.Items.Add(provider);
-            chainList.DisplayMemberPath = "Name";
-            chainList.BorderBrush = B("#E1E5EB");
-            chainList.Background = B("#FBFCFE");
-            chainList.MinHeight = 115;
-            chainList.MaxHeight = 145;
-            chainList.FontSize = 13;
-            chainList.Padding = new Thickness(8);
+            foreach (ProviderInfo provider in selected) chainList.Items.Add(new FallbackStepRow(provider));
+            chainList.DisplayMemberPath = "";
+            chainList.BorderThickness = new Thickness(0);
+            chainList.Background = Brushes.Transparent;
+            chainList.MinHeight = 120;
+            chainList.MaxHeight = 310;
+            chainList.Padding = new Thickness(0);
             body.Children.Add(chainList);
 
             StackPanel reorder = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 9, 0, 0) };
@@ -1029,7 +1452,32 @@ namespace FleetGuardSetup
             chainList.Items.Insert(target, item);
             chainList.SelectedIndex = target;
             preferredProviderOrder.Clear();
-            foreach (ProviderInfo provider in chainList.Items.Cast<ProviderInfo>()) preferredProviderOrder.Add(provider.Id);
+            foreach (FallbackStepRow row in chainList.Items.Cast<FallbackStepRow>()) preferredProviderOrder.Add(row.Provider.Id);
+        }
+
+        private void RefreshClaudeCapNote()
+        {
+            ModelChoice selected = claudeSourceModelBox.SelectedItem as ModelChoice;
+            string id = selected == null ? claudeSourceModelBox.Text : selected.Id;
+            if (String.Concat(id).IndexOf("fable", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                claudeCapNote.Text = "Fable has a separate weekly allowance. You can try another Claude model first, then continue to another provider/model if that allowance is unavailable.";
+            }
+            else if (id == "__auto")
+            {
+                claudeCapNote.Text = "Fleet Supervisor will detect the active Claude task. Select Fable explicitly to configure its model-specific weekly-limit path.";
+            }
+            else
+            {
+                claudeCapNote.Text = "No separate Fable-style weekly cap is associated with this selection. Normal session, account, and provider limits can still trigger the next provider/model.";
+            }
+        }
+
+        private void RefreshClaudeFallbackStep()
+        {
+            bool enabled = claudeFallbackBox.IsChecked == true;
+            claudeFallbackModelBox.IsEnabled = enabled;
+            if (claudeFallbackStep != null) claudeFallbackStep.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private bool RequiredReady()
@@ -1049,6 +1497,7 @@ namespace FleetGuardSetup
             Task.Run(delegate
             {
                 foreach (ProviderInfo provider in providers) InspectProvider(provider, preserveSelections);
+                DiscoverProviderModels();
             }).ContinueWith(delegate
             {
                 Dispatcher.Invoke(delegate
@@ -1060,6 +1509,64 @@ namespace FleetGuardSetup
                     ShowStep(1);
                 });
             });
+        }
+
+        private void DiscoverProviderModels()
+        {
+            foreach (ProviderInfo provider in providers)
+            {
+                provider.AvailableModels.Clear();
+                provider.AvailableModels.Add(new ModelChoice { Id="__default", Name="Provider default" });
+            }
+            ProviderInfo local = providers.FirstOrDefault(delegate(ProviderInfo value) { return value.Id == "local"; });
+            if (local != null && !String.IsNullOrWhiteSpace(localModel))
+                local.AvailableModels.Add(new ModelChoice { Id=localModel, Name=localModel + " (local)" });
+
+            string paseoCli = ResolveWorkingPaseoCli();
+            if (String.IsNullOrWhiteSpace(paseoCli)) return;
+            foreach (ProviderInfo provider in providers.Where(delegate(ProviderInfo value) { return value.Id == "claude" || value.Id == "codex" || value.Id == "copilot"; }))
+            {
+                CommandResult result = RunCapture(paseoCli, "provider models " + provider.Id + " --json", 12000);
+                if (result.ExitCode != 0 || String.IsNullOrWhiteSpace(result.Output)) continue;
+                try
+                {
+                    object[] models = new JavaScriptSerializer().DeserializeObject(result.Output) as object[];
+                    if (models == null) continue;
+                    foreach (object raw in models)
+                    {
+                        Dictionary<string, object> model = raw as Dictionary<string, object>;
+                        object id;
+                        object label;
+                        if (model == null || !model.TryGetValue("id", out id) || id == null || String.IsNullOrWhiteSpace(id.ToString())) continue;
+                        string name = model.TryGetValue("model", out label) && label != null && !String.IsNullOrWhiteSpace(label.ToString()) ? label.ToString() : id.ToString();
+                        if (!provider.AvailableModels.Any(delegate(ModelChoice existing) { return String.Equals(existing.Id, id.ToString(), StringComparison.OrdinalIgnoreCase); }))
+                            provider.AvailableModels.Add(new ModelChoice { Id=id.ToString(), Name=name });
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static string ResolveWorkingPaseoCli()
+        {
+            List<string> candidates = new List<string>();
+            string resolved = ResolveCommand("paseo");
+            if (!String.IsNullOrWhiteSpace(resolved)) candidates.Add(resolved);
+            string desktop = FindPaseoDesktop();
+            if (!String.IsNullOrWhiteSpace(desktop))
+            {
+                string root = Path.GetDirectoryName(desktop);
+                candidates.Add(Path.Combine(root, "resources", "bin", "paseo.cmd"));
+                candidates.Add(Path.Combine(root, "resources", "bin", "paseo.exe"));
+            }
+            candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "paseo.cmd"));
+            foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (String.IsNullOrWhiteSpace(candidate) || !File.Exists(candidate)) continue;
+                CommandResult version = RunCapture(candidate, "--version", 6000);
+                if (version.ExitCode == 0) return candidate;
+            }
+            return "";
         }
 
         private void InspectProvider(ProviderInfo provider, bool preserveSelection)
@@ -1518,7 +2025,7 @@ namespace FleetGuardSetup
         private void InstallGuard()
         {
             if (installing) return;
-            List<ProviderInfo> ordered = chainList.Items.Cast<ProviderInfo>().ToList();
+            List<FallbackStepRow> ordered = chainList.Items.Cast<FallbackStepRow>().ToList();
             if (ordered.Count == 0) return;
             string generatedConfig = BuildConfig(ordered);
             installing = true;
@@ -1561,7 +2068,7 @@ namespace FleetGuardSetup
             });
         }
 
-        private void PerformInstall(List<ProviderInfo> ordered, string generatedConfig)
+        private void PerformInstall(List<FallbackStepRow> ordered, string generatedConfig)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string temporaryPayload;
@@ -1613,21 +2120,66 @@ namespace FleetGuardSetup
             }
         }
 
-        private string BuildConfig(List<ProviderInfo> ordered)
+        private string BuildConfig(List<FallbackStepRow> ordered)
         {
             List<object> fallbacks = new List<object>();
-            foreach (ProviderInfo provider in ordered)
+            string claudeFallbackModel = claudeFallbackStep == null ? "" : claudeFallbackStep.ChosenModel;
+            if (claudeFallbackBox.IsChecked == true && !String.IsNullOrWhiteSpace(claudeFallbackModel))
             {
+                Dictionary<string, object> claudeWorker = new Dictionary<string, object>
+                {
+                    { "id", "claude-" + SafeId(claudeFallbackModel) },
+                    { "kind", "paseo" },
+                    { "provider", "claude/" + claudeFallbackModel.Trim() }
+                };
+                if (claudeFallbackProvider != null && claudeFallbackProvider.UseForEnabled)
+                {
+                    claudeWorker["useFor"] = String.IsNullOrWhiteSpace(claudeFallbackProvider.UseFor) ? "reporting-progress" : claudeFallbackProvider.UseFor;
+                    if (!String.IsNullOrWhiteSpace(claudeFallbackProvider.CustomSystemPrompt)) claudeWorker["systemPrompt"] = claudeFallbackProvider.CustomSystemPrompt;
+                }
+                fallbacks.Add(claudeWorker);
+            }
+            foreach (FallbackStepRow row in ordered)
+            {
+                ProviderInfo provider = row.Provider;
+                string selectedModel = row.ChosenModel;
+                Dictionary<string, object> worker = new Dictionary<string, object>();
                 if (provider.Id == "codex")
-                    fallbacks.Add(new Dictionary<string, object> { { "id", "codex" }, { "kind", "paseo" }, { "provider", "codex" }, { "modeId", "auto-review" } });
+                {
+                    worker["kind"] = "paseo";
+                    worker["provider"] = ExactProvider("codex", selectedModel);
+                    worker["modeId"] = "auto-review";
+                }
                 else if (provider.Id == "antigravity")
-                    fallbacks.Add(new Dictionary<string, object> { { "id", "antigravity" }, { "kind", "antigravity" } });
+                {
+                    worker["kind"] = "antigravity";
+                    if (!String.IsNullOrWhiteSpace(selectedModel)) worker["model"] = selectedModel;
+                }
                 else if (provider.Id == "cursor")
-                    fallbacks.Add(new Dictionary<string, object> { { "id", "cursor" }, { "kind", "paseo" }, { "provider", "fleet-cursor" }, { "modeId", "agent" } });
+                {
+                    worker["kind"] = "paseo";
+                    worker["provider"] = ExactProvider("fleet-cursor", selectedModel);
+                    worker["modeId"] = "agent";
+                }
                 else if (provider.Id == "copilot")
-                    fallbacks.Add(new Dictionary<string, object> { { "id", "copilot" }, { "kind", "paseo" }, { "provider", "copilot" }, { "modeId", "allow-all" } });
+                {
+                    worker["kind"] = "paseo";
+                    worker["provider"] = ExactProvider("copilot", selectedModel);
+                    worker["modeId"] = "allow-all";
+                }
                 else if (provider.Id == "local")
-                    fallbacks.Add(new Dictionary<string, object> { { "id", "local" }, { "kind", "paseo" }, { "provider", "fleet-local/fleet-local-api/" + localModel } });
+                {
+                    string model = String.IsNullOrWhiteSpace(selectedModel) ? localModel : selectedModel;
+                    worker["kind"] = "paseo";
+                    worker["provider"] = "fleet-local/fleet-local-api/" + model;
+                }
+                worker["id"] = provider.Id + (String.IsNullOrWhiteSpace(selectedModel) ? "" : "-" + SafeId(selectedModel));
+                if (provider.UseForEnabled)
+                {
+                    worker["useFor"] = String.IsNullOrWhiteSpace(provider.UseFor) ? "reporting-progress" : provider.UseFor;
+                    if (!String.IsNullOrWhiteSpace(provider.CustomSystemPrompt)) worker["systemPrompt"] = provider.CustomSystemPrompt;
+                }
+                fallbacks.Add(worker);
             }
             PolicyOption continuationMode = continuationModeBox.SelectedItem as PolicyOption ?? new PolicyOption { Value="single-pass" };
             PolicyOption nudgeCount = nudgeCountBox.SelectedItem as PolicyOption ?? new PolicyOption { Number=0 };
@@ -1641,6 +2193,36 @@ namespace FleetGuardSetup
                 { "retryDelayMinutes", retryDelay.Number },
                 { "maxCycles", 0 }
             };
+            List<object> councilMembers = new List<object>();
+            if (claudeFallbackBox.IsChecked == true && claudeFallbackProvider != null && claudeFallbackProvider.IncludeInCouncil && !String.IsNullOrWhiteSpace(claudeFallbackModel))
+            {
+                Dictionary<string, object> claudeCouncilMember = new Dictionary<string, object>
+                {
+                    { "id", "claude-" + SafeId(claudeFallbackModel) },
+                    { "provider", "claude/" + claudeFallbackModel.Trim() },
+                    { "lens", String.IsNullOrWhiteSpace(claudeFallbackProvider.CouncilLens) ? "skepticism" : claudeFallbackProvider.CouncilLens }
+                };
+                if (claudeFallbackProvider.CouncilLens == "custom" && !String.IsNullOrWhiteSpace(claudeFallbackProvider.CouncilSystemPrompt)) claudeCouncilMember["systemPrompt"] = claudeFallbackProvider.CouncilSystemPrompt;
+                councilMembers.Add(claudeCouncilMember);
+            }
+            foreach (FallbackStepRow row in ordered.Where(delegate(FallbackStepRow value) { return value.Provider.IncludeInCouncil && value.Provider.Id != "antigravity"; }))
+            {
+                ProviderInfo provider = row.Provider;
+                string baseProvider = provider.Id == "cursor" ? "fleet-cursor" : provider.Id == "local" ? "fleet-local" : provider.Id;
+                string model = row.ChosenModel;
+                string exact = provider.Id == "local" ? "fleet-local/fleet-local-api/" + (String.IsNullOrWhiteSpace(model) ? localModel : model) : ExactProvider(baseProvider, model);
+                Dictionary<string, object> member = new Dictionary<string, object>
+                {
+                    { "id", provider.Id + (String.IsNullOrWhiteSpace(model) ? "" : "-" + SafeId(model)) },
+                    { "provider", exact },
+                    { "lens", String.IsNullOrWhiteSpace(provider.CouncilLens) ? "skepticism" : provider.CouncilLens }
+                };
+                if (provider.CouncilLens == "custom" && !String.IsNullOrWhiteSpace(provider.CouncilSystemPrompt)) member["systemPrompt"] = provider.CouncilSystemPrompt;
+                councilMembers.Add(member);
+            }
+            string sourceModel = claudeSourceModelBox.SelectedValue as string;
+            if (String.IsNullOrWhiteSpace(sourceModel)) sourceModel = claudeSourceModelBox.Text;
+            if (sourceModel == "__auto") sourceModel = "";
             Dictionary<string, object> config = new Dictionary<string, object>
             {
                 { "enabled", true },
@@ -1651,11 +2233,26 @@ namespace FleetGuardSetup
                 { "recentContextCharacters", 28000 },
                 { "catchUpWindowMinutes", 240 },
                 { "continuationPolicy", continuation },
+                { "sourceModel", sourceModel },
+                { "claudeFallbackModel", claudeFallbackBox.IsChecked == true ? claudeFallbackModel : "" },
+                { "council", new Dictionary<string, object> { { "enabled", true }, { "members", councilMembers }, { "maxContextCharacters", 32000 } } },
                 { "localModel", new Dictionary<string, object> { { "endpoint", localEndpoint }, { "model", localModel } } },
                 { "fallbackOrder", fallbacks }
             };
             JavaScriptSerializer json = new JavaScriptSerializer();
             return PrettyJson(json.Serialize(config)) + Environment.NewLine;
+        }
+
+        private static string ExactProvider(string provider, string model)
+        {
+            return String.IsNullOrWhiteSpace(model) ? provider : provider + "/" + model.Trim();
+        }
+
+        private static string SafeId(string value)
+        {
+            string safe = Regex.Replace(String.Concat(value ?? "").ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+            if (safe.Length > 32) safe = safe.Substring(0, 32).Trim('-');
+            return String.IsNullOrWhiteSpace(safe) ? "model" : safe;
         }
 
         private static string PrettyJson(string json)
@@ -1914,6 +2511,23 @@ namespace FleetGuardSetup
                 BorderBrush = B("#DCE1EA")
             };
             return box;
+        }
+
+        private static ComboBox ModelBox()
+        {
+            return new ComboBox
+            {
+                DisplayMemberPath = "Name",
+                SelectedValuePath = "Id",
+                IsEditable = true,
+                Height = 31,
+                MinWidth = 190,
+                Padding = new Thickness(8, 2, 8, 2),
+                FontSize = 10.5,
+                Foreground = B("#343B47"),
+                Background = Brushes.White,
+                BorderBrush = B("#DCE1EA")
+            };
         }
 
         private static Button ChromeButton(string text)

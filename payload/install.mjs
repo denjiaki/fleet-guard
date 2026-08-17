@@ -11,6 +11,7 @@ const launcherPs1 = path.join(here, "launch-paseo-with-guard.ps1");
 const nativeLauncher = path.join(here, "FleetGuardLauncher.exe");
 const settingsExe = path.join(here, "FleetGuardSetup.exe");
 const launcherConfigPath = path.join(here, "launcher-config.json");
+const supervisorPluginPath = path.join(here, "fleet-supervisor-plugin");
 
 const userHome = process.env.FLEET_GUARD_USER_HOME || os.homedir();
 const guardHome = process.env.FLEET_GUARD_STATE_HOME || path.join(userHome, ".paseo-fleet-guard");
@@ -53,6 +54,11 @@ const defaultConfig = {
     reuseSessions: true,
     retryDelayMinutes: 15,
     maxCycles: 0,
+  },
+  council: {
+    enabled: true,
+    members: [],
+    maxContextCharacters: 32000,
   },
   fallbackOrder: [
     { id: "codex", kind: "paseo", provider: "codex", modeId: "auto-review" },
@@ -125,6 +131,21 @@ try {
       console.log("Removed obsolete visible Fleet Supervisor provider from Paseo config.");
     }
     const guardConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (parsed.pluginsEnabled !== true) {
+      parsed.pluginsEnabled = true;
+      configChanged = true;
+    }
+    parsed.plugins ??= {};
+    const desiredFleetSupervisorPlugin = {
+      source: "directory",
+      path: supervisorPluginPath,
+      enabled: true,
+    };
+    if (JSON.stringify(parsed.plugins["fleet-supervisor"]) !== JSON.stringify(desiredFleetSupervisorPlugin)) {
+      parsed.plugins["fleet-supervisor"] = desiredFleetSupervisorPlugin;
+      configChanged = true;
+      console.log("Enabled the Fleet Supervisor controls inside Paseo.");
+    }
     const needsFleetCursor = guardConfig?.fallbackOrder?.some((worker) => worker?.provider === "fleet-cursor");
     if (needsFleetCursor) {
       parsed.agents ??= {};
@@ -314,7 +335,7 @@ if (process.env.FLEET_GUARD_SKIP_START !== "1") {
 }
 
 console.log("");
-console.log("Fleet Guard v3.2.0 installed and started for the current Paseo session.");
+console.log("Fleet Supervisor v4.0.0 beta 1 installed and started for the current Paseo session.");
 console.log(`Detected Paseo target: ${paseo.Target}`);
 console.log(`Desktop shortcut:    ${desktopLink}`);
 console.log(`Start Menu shortcut: ${startLink}`);

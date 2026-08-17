@@ -1,0 +1,159 @@
+# Fleet Supervisor — verify on all three platforms, then package a release.
+#
+# There is deliberately no native compilation step. Fleet Supervisor used to
+# need one: a Windows-only C# launcher and setup app. It no longer does — the
+# settings UI is a Paseo plugin surface that Paseo renders, and the guard is
+# started by the plugin itself. What ships is a plugin directory, a Node script
+# and a setup script, all of which run unmodified on Windows, macOS and Linux.
+#
+# So CI's job is to *prove* that portability rather than cross-compile for it:
+# every job runs the real setup on the real OS against a throwaway Paseo home.
+#
+# Place at .github/workflows/release.yml
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Parse-checks every shipped script under the platform's own Node.
+      - name: Syntax-check the guard
+        run: node --check payload/src/fleet-guard.mjs
+
+      - name: Syntax-check setup
+        run: node --check payload/setup.mjs
+
+      - name: Typecheck the plugin
+        working-directory: payload/fleet-supervisor-plugin
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+
+      # The installer is the part most likely to break on a specific platform:
+      # path separators, home resolution, and directory creation all differ.
+      # Running it for real on each OS is the only check that means anything.
+      - name: Install against a throwaway Paseo home
+        shell: bash
+        run: |
+          set -euo pipefail
+          PASEO_HOME_DIR="$RUNNER_TEMP/paseo-home"
+          FLEET_HOME_DIR="$RUNNER_TEMP/fleet-home"
+          mkdir -p "$PASEO_HOME_DIR"
+          echo '{"version":1}' > "$PASEO_HOME_DIR/config.json"
+
+          node payload/setup.mjs --paseo-home "$PASEO_HOME_DIR" --fleet-home "$FLEET_HOME_DIR"
+
+          node -e "
+            const fs = require('node:fs');
+            const paseo = JSON.parse(fs.readFileSync(process.argv[1] + '/config.json', 'utf8'));
+            const fleet = JSON.parse(fs.readFileSync(process.argv[2] + '/config.json', 'utf8'));
+            const entry = paseo.plugins?.['fleet-supervisor'];
+            if (paseo.pluginsEnabled !== true) throw new Error('pluginsEnabled was not set');
+            if (!entry?.enabled) throw new Error('plugin was not registered');
+            if (!fs.existsSync(entry.path)) throw new Error('plugin path does not exist: ' + entry.path);
+            if (!fs.existsSync(fleet.guardScript)) throw new Error('guardScript does not exist: ' + fleet.guardScript);
+            if (fleet.autoStart !== true) throw new Error('autoStart was not set');
+            console.log('setup verified on ' + process.platform);
+          " "$PASEO_HOME_DIR" "$FLEET_HOME_DIR"
+
+      # Re-running setup must not duplicate or clobber user settings.
+      - name: Re-run setup (idempotency)
+        shell: bash
+        run: |
+          set -euo pipefail
+          PASEO_HOME_DIR="$RUNNER_TEMP/paseo-home"
+          FLEET_HOME_DIR="$RUNNER_TEMP/fleet-home"
+          node -e "
+            const fs=require('node:fs'); const f=process.argv[1]+'/config.json';
+            const c=JSON.parse(fs.readFileSync(f,'utf8'));
+            c.council.members=[{id:'keep-me',provider:'codex',lens:'qa'}];
+            fs.writeFileSync(f, JSON.stringify(c,null,2));
+          " "$FLEET_HOME_DIR"
+
+          node payload/setup.mjs --paseo-home "$PASEO_HOME_DIR" --fleet-home "$FLEET_HOME_DIR"
+
+          node -e "
+            const fs=require('node:fs');
+            const c=JSON.parse(fs.readFileSync(process.argv[1]+'/config.json','utf8'));
+            if (c.council.members?.[0]?.id !== 'keep-me') throw new Error('setup clobbered existing settings');
+            console.log('idempotency verified');
+          " "$FLEET_HOME_DIR"
+
+      - name: Uninstall cleanly
+        shell: bash
+        run: |
+          set -euo pipefail
+          PASEO_HOME_DIR="$RUNNER_TEMP/paseo-home"
+          node payload/setup.mjs --uninstall --paseo-home "$PASEO_HOME_DIR"
+          node -e "
+            const fs=require('node:fs');
+            const c=JSON.parse(fs.readFileSync(process.argv[1]+'/config.json','utf8'));
+            if (c.plugins?.['fleet-supervisor']) throw new Error('plugin registration survived uninstall');
+            console.log('uninstall verified');
+          " "$PASEO_HOME_DIR"
+
+  package:
+    name: package
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # One archive for every platform, because nothing in it is compiled.
+      - name: Build the release archive
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="fleet-supervisor-$VERSION"
+          mkdir -p "dist/$STAGE"
+          cp -r payload/fleet-supervisor-plugin "dist/$STAGE/"
+          mkdir -p "dist/$STAGE/src"
+          cp payload/src/fleet-guard.mjs "dist/$STAGE/src/"
+          cp payload/setup.mjs "dist/$STAGE/"
+          for doc in README.md FLEET-SUPERVISOR-CHANGES.md LICENSE; do
+            [ -f "$doc" ] && cp "$doc" "dist/$STAGE/" || true
+          done
+          rm -rf "dist/$STAGE/fleet-supervisor-plugin/node_modules"
+          (cd dist && zip -qr "$STAGE.zip" "$STAGE" && tar -czf "$STAGE.tar.gz" "$STAGE")
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-supervisor
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+          generate_release_notes: true
