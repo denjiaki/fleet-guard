@@ -131,14 +131,51 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           STAGE="fleet-supervisor-$VERSION"
-          mkdir -p "dist/$STAGE"
-          cp -r payload/fleet-supervisor-plugin "dist/$STAGE/"
           mkdir -p "dist/$STAGE/src"
+          cp -r payload/fleet-supervisor-plugin "dist/$STAGE/"
           cp payload/src/fleet-guard.mjs "dist/$STAGE/src/"
+          # The ACP adapter is what lets Paseo drive Antigravity at all.
+          cp payload/src/antigravity-acp.mjs "dist/$STAGE/src/"
           cp payload/setup.mjs "dist/$STAGE/"
+          # Without these the guard cannot resolve @getpaseo/client, zod or the
+          # ACP SDK, so the archive would unpack into something that cannot run.
+          cp payload/package.json payload/package-lock.json "dist/$STAGE/"
+          mkdir -p "dist/$STAGE/tests"
+          cp payload/tests/antigravity-acp.handshake.mjs "dist/$STAGE/tests/"
+          cp payload/tests/antigravity-acp.turn.mjs "dist/$STAGE/tests/"
+          # The buttons need a Paseo built from source until plugin support
+          # reaches a Paseo release, so ship the patch alongside.
+          cp paseo-plugin-action-slots.patch "dist/$STAGE/"
+          mkdir -p "dist/$STAGE/docs"
+          [ -f docs/antigravity-acp.md ] && cp docs/antigravity-acp.md "dist/$STAGE/docs/" || true
           for doc in README.md FLEET-SUPERVISOR-CHANGES.md LICENSE; do
             [ -f "$doc" ] && cp "$doc" "dist/$STAGE/" || true
           done
+          cat > "dist/$STAGE/INSTALL.txt" <<'TXT'
+          Fleet Supervisor
+          ================
+
+          Requirements: Node.js 22+, Paseo, and at least one fallback provider CLI.
+
+              npm ci
+              node setup.mjs
+
+          Then fully quit Paseo (including its daemon) and reopen it. Fleet
+          Supervisor starts with Paseo and exits with it; there is no shortcut
+          to launch. Settings live in Paseo's sidebar.
+
+          IMPORTANT — the buttons need a Paseo built from source.
+          No released Paseo has a plugin system yet: it landed upstream the day
+          after v0.4.0 shipped. Automatic handoff works against a stock Paseo,
+          but Skeptic Review, the Fleet Supervisor toggle, and the settings
+          surface do not. To get them, build Paseo from source with
+          paseo-plugin-action-slots.patch applied (git am < the patch). See
+          README.md, "Running a patched Paseo build".
+
+          Antigravity support is EXPERIMENTAL: the ACP handshake and Gemini
+          model catalogue are verified, but a successful Gemini turn has not
+          been. See docs/antigravity-acp.md.
+          TXT
           rm -rf "dist/$STAGE/fleet-supervisor-plugin/node_modules"
           (cd dist && zip -qr "$STAGE.zip" "$STAGE" && tar -czf "$STAGE.tar.gz" "$STAGE")
           ls -la dist
