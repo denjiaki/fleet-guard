@@ -5,15 +5,10 @@ import { z } from "zod";
 import {
   defineRpc,
   useRpc,
+  type PluginAgentPanelProps,
   type PluginContext,
   type PluginSurfaceProps,
-} from "@paseo/plugin";
-import {
-  mountDomActions,
-  showDomNotice,
-  type DomActionMessage,
-  type DomActionTarget,
-} from "./dom-actions";
+} from "@getpaseo/plugin";
 
 const COMPOSER_ACTION_TITLE = "Skeptic Review";
 const MESSAGE_ACTION_TITLE = "Skeptic Review this message";
@@ -281,23 +276,65 @@ const ThemeSchema = z.object({
   colors: z
     .object({
       surface0: z.string().default("#111111"),
-      surface1: z.string().default("#1a1a1a"),
-      surface2: z.string().default("#242424"),
       foreground: z.string().default("#f5f5f5"),
       foregroundMuted: z.string().default("#9b9b9b"),
       accent: z.string().default("#4f8cff"),
       accentForeground: z.string().default("#ffffff"),
       statusDanger: z.string().default("#ff6b6b"),
-      border: z.string().default("#2e2e2e"),
     })
     .loose(),
 });
 
-type Palette = z.infer<typeof ThemeSchema>["colors"];
+/**
+ * Paseo's `PluginTheme` supplies exactly six colours (see PluginTheme in the
+ * SDK). It does NOT provide raised surfaces or a border, so those are derived
+ * by blending the foreground into the background.
+ *
+ * Deriving rather than hard-coding matters: fixed dark defaults looked correct
+ * in Paseo's dark theme and unreadable in its light one. Blending follows
+ * whichever theme the host is actually in.
+ */
+type Palette = z.infer<typeof ThemeSchema>["colors"] & {
+  surface1: string;
+  surface2: string;
+  border: string;
+};
+
+function parseHex(value: string): [number, number, number] | null {
+  const hex = value.trim().replace(/^#/, "");
+  const full =
+    hex.length === 3
+      ? hex
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : hex;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null;
+  return [
+    parseInt(full.slice(0, 2), 16),
+    parseInt(full.slice(2, 4), 16),
+    parseInt(full.slice(4, 6), 16),
+  ];
+}
+
+/** Blend `amount` of `over` into `base`; falls back to `base` on odd input. */
+function mix(base: string, over: string, amount: number): string {
+  const a = parseHex(base);
+  const b = parseHex(over);
+  if (!a || !b) return base;
+  const channel = (i: number) => Math.round(a[i] + (b[i] - a[i]) * amount);
+  return `#${[0, 1, 2].map((i) => channel(i).toString(16).padStart(2, "0")).join("")}`;
+}
 
 function readPalette(theme: unknown): Palette {
   const parsed = ThemeSchema.safeParse(theme);
-  return parsed.success ? parsed.data.colors : ThemeSchema.parse({ colors: {} }).colors;
+  const colors = parsed.success ? parsed.data.colors : ThemeSchema.parse({ colors: {} }).colors;
+  return {
+    ...colors,
+    surface1: mix(colors.surface0, colors.foreground, 0.05),
+    surface2: mix(colors.surface0, colors.foreground, 0.1),
+    border: mix(colors.surface0, colors.foreground, 0.2),
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1427,100 +1464,54 @@ function toBridgePayload(input: PluginActionPayload): Record<string, unknown> {
 }
 
 /* ------------------------------------------------------------------ */
-/* Renderer-side bridge (fallback path only)                           */
-/* ------------------------------------------------------------------ */
-
-/**
- * Injected buttons run in the renderer, which cannot read
- * `~/.paseo-fleet-guard/bridge-token` and cannot reach `invokePluginRpc` (that
- * is only wired into plugin surfaces). So they collect the token from the
- * bridge's origin-gated handshake and then authenticate normally.
- *
- * The handshake only answers requests whose `Origin` is a Paseo renderer
- * origin, which the browser sets and a page cannot forge, and every write route
- * demands `application/json` so a cross-origin write is always preflighted.
- */
-let rendererToken: string | null = null;
-
-async function rendererBridgeToken(force = false): Promise<string> {
-  if (rendererToken && !force) return rendererToken;
-  let response: Response;
-  try {
-    response = await fetch(`${BRIDGE_ORIGIN}/v1/handshake`, { method: "GET", mode: "cors" });
-  } catch {
-    throw new Error(
-      "Fleet Supervisor is not running, so the Council has no reviewers. Start Paseo with the Fleet Supervisor shortcut and try again.",
-    );
-  }
-  if (!response.ok) throw new Error("Fleet Supervisor refused the bridge handshake.");
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  const token = typeof body.token === "string" ? body.token.trim() : "";
-  if (!token) throw new Error("Fleet Supervisor returned no bridge token.");
-  rendererToken = token;
-  return token;
-}
-
-async function rendererFetch(
-  path: string,
-  init: { method: string; body?: unknown },
-): Promise<Record<string, unknown>> {
-  const send = async (token: string) =>
-    fetch(`${BRIDGE_ORIGIN}${path}`, {
-      method: init.method,
-      mode: "cors",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-    });
-
-  let response = await send(await rendererBridgeToken());
-  // Fleet Supervisor may have restarted and reissued its token since the last
-  // press; re-handshake once before treating it as a real failure.
-  if (response.status === 401) response = await send(await rendererBridgeToken(true));
-
-  const result = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok) {
-    throw new Error(
-      typeof result.error === "string"
-        ? result.error
-        : `Fleet Supervisor returned HTTP ${response.status} for ${path}.`,
-    );
-  }
-  return result;
-}
-
-function rendererBridgeGet(path: string): Promise<Record<string, unknown>> {
-  return rendererFetch(path, { method: "GET" });
-}
-
-function rendererBridgePost(
-  path: string,
-  body: unknown,
-): Promise<Record<string, unknown>> {
-  return rendererFetch(path, { method: "POST", body });
-}
-
-async function startCouncilFromRenderer(payload: Record<string, unknown>): Promise<string> {
-  const result = await rendererBridgePost("/v1/council", payload);
-  return typeof result.message === "string" && result.message.trim().length > 0
-    ? result.message
-    : "Council review started. The digest will arrive in this conversation.";
-}
-
-/* ------------------------------------------------------------------ */
 /* Guard supervision (daemon side)                                     */
 /* ------------------------------------------------------------------ */
 
 const GUARD_READY_TIMEOUT_MS = 20_000;
 const GUARD_POLL_INTERVAL_MS = 500;
 
+/**
+ * Read the bridge token without throwing. Daemon-side only: in the client
+ * bundle every `node:*` import resolves to `{}`, so this returns null there.
+ */
+async function readBridgeTokenQuietly(): Promise<string | null> {
+  try {
+    const [{ readFile }, nodePath, os] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:path"),
+      import("node:os"),
+    ]);
+    if (typeof os.homedir !== "function") return null;
+    const stateHome =
+      process.env.FLEET_GUARD_STATE_HOME ?? nodePath.join(os.homedir(), ".paseo-fleet-guard");
+    return (await readFile(nodePath.join(stateHome, "bridge-token"), "utf8")).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is the bridge up?
+ *
+ * Every bridge route is bearer-authed, so an unauthenticated probe gets 401 —
+ * which this used to treat as "not running". The guard would start correctly,
+ * answer on its port immediately, and still be reported as "did not report
+ * ready within 20 seconds" while startup stalled for the full timeout.
+ *
+ * A 401 is a *positive* answer to the only question being asked: something is
+ * listening on the loopback port and speaking our protocol. The token is sent
+ * when it can be read, so the status body comes back too.
+ */
 async function bridgeStatus(timeoutMs = 1500): Promise<Record<string, unknown> | null> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
-    const response = await fetch(`${BRIDGE_ORIGIN}/v1/status`, { signal: abort.signal });
+    const token = await readBridgeTokenQuietly();
+    const response = await fetch(`${BRIDGE_ORIGIN}/v1/status`, {
+      signal: abort.signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (response.status === 401 || response.status === 403) return {};
     if (!response.ok) return null;
     return (await response.json()) as Record<string, unknown>;
   } catch {
@@ -1689,6 +1680,175 @@ function shieldDaemonProcess(): void {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* Agent panel — the buttons                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rendered by Paseo inside the agent view via `addWorkspacePanel`.
+ *
+ * This replaced two earlier approaches. Paseo 0.4.0 had no way for a plugin to
+ * contribute a button, so the buttons were either added by patching Paseo
+ * (composer/message action slots) or injected into its DOM. Since 0.5.0 the
+ * host contributes panels itself, so neither is needed: this is a plain
+ * component the host renders, on a stock released Paseo.
+ */
+function AgentActionsPanel({ theme, agentId, workspaceId }: PluginAgentPanelProps) {
+  const colors = readPalette(theme);
+  const callCouncil = useRpc(councilReview);
+  const callHandoff = useRpc(manualHandoffFromComposer);
+  const callToggle = useRpc(toggleAutoHandoff);
+  const callState = useRpc(supervisorState);
+  const queryClient = useQueryClient();
+
+  const [notice, setNotice] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Drives the on/off tint. `null` means "not known yet", which stays neutral
+  // rather than claiming a state the guard never reported.
+  const state = useQuery({
+    queryKey: ["fleet", "supervisor-state"],
+    queryFn: () => callState({}),
+    staleTime: 5_000,
+    retry: false,
+  });
+  const active: boolean | null = state.data?.active ?? null;
+
+  const run = useCallback(
+    async (id: string, action: () => Promise<string>) => {
+      setBusy(id);
+      setNotice(null);
+      setFailed(false);
+      try {
+        setNotice(await action());
+      } catch (error) {
+        setFailed(true);
+        setNotice(error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [],
+  );
+
+  const onReview = useCallback(
+    () =>
+      run("review", async () => {
+        const result = await callCouncil({ scope: "latest-context", agentId, workspaceId });
+        return result.message;
+      }),
+    [agentId, callCouncil, run, workspaceId],
+  );
+
+  const onToggle = useCallback(
+    () =>
+      run("toggle", async () => {
+        const result = await callToggle({ enabled: null });
+        await queryClient.invalidateQueries({ queryKey: ["fleet", "supervisor-state"] });
+        return result.message;
+      }),
+    [callToggle, queryClient, run],
+  );
+
+  const onHandoff = useCallback(
+    () =>
+      run("handoff", async () => {
+        const result = await callHandoff({ scope: "latest-context", agentId, workspaceId });
+        return result.message;
+      }),
+    [agentId, callHandoff, run, workspaceId],
+  );
+
+  const supervisorTint =
+    active === true ? "#3fa66a" : active === false ? colors.statusDanger : colors.border;
+
+  return (
+    <View style={{ gap: 10, padding: 12, backgroundColor: colors.surface0 }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        <PanelButton
+          colors={colors}
+          label={COMPOSER_ACTION_TITLE}
+          busy={busy === "review"}
+          disabled={busy !== null}
+          onPress={onReview}
+        />
+        <PanelButton
+          colors={colors}
+          label={SUPERVISOR_ACTION_TITLE}
+          busy={busy === "toggle"}
+          disabled={busy !== null}
+          borderColor={supervisorTint}
+          labelColor={active === false ? colors.foregroundMuted : colors.foreground}
+          onPress={onToggle}
+        />
+        <PanelButton
+          colors={colors}
+          label={HANDOFF_ACTION_TITLE}
+          busy={busy === "handoff"}
+          disabled={busy !== null}
+          onPress={onHandoff}
+        />
+      </View>
+
+      <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>
+        {active === true
+          ? "Watching for session limits. Reviews run on the configured reviewers."
+          : active === false
+            ? "Automatic handoff is off. Skeptic Review still works."
+            : "Fleet Supervisor state unknown — is the guard running?"}
+      </Text>
+
+      {notice ? (
+        <Text style={{ color: failed ? colors.statusDanger : colors.foreground, fontSize: 12 }}>
+          {notice}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function PanelButton({
+  colors,
+  label,
+  onPress,
+  busy,
+  disabled,
+  borderColor,
+  labelColor,
+}: {
+  colors: Palette;
+  label: string;
+  onPress: () => void;
+  busy: boolean;
+  disabled: boolean;
+  borderColor?: string;
+  labelColor?: string;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ busy, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={{
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: borderColor ?? colors.border,
+        backgroundColor: colors.surface1,
+        opacity: disabled && !busy ? 0.5 : 1,
+      }}
+    >
+      <Text style={{ color: labelColor ?? colors.foreground, fontSize: 13, fontWeight: "500" }}>
+        {busy ? `${label}…` : label}
+      </Text>
+    </Pressable>
+  );
+}
+
 export default function contribute(plugin: PluginContext) {
   shieldDaemonProcess();
 
@@ -1844,113 +2004,58 @@ export default function contribute(plugin: PluginContext) {
     surface: "settings",
   });
 
-  // Paseo 0.4.0 has no composer or message action slot. Where the host does
-  // expose them, use them: real components, real theming, real accessibility.
-  // Where it does not, fall back to injecting the buttons so users are not
-  // forced onto a rebuilt Paseo. The daemon-side context has neither method, so
-  // this reads as false there and the fallback's own `document` guard keeps it
-  // inert in that bundle too.
-  //
-  // Set localStorage["fleet-supervisor:force-dom-actions"] = "1" to exercise the
-  // fallback on a host that does have the slots. Useful when the injected path
-  // regresses against a new Paseo release and needs debugging without
-  // downgrading.
-  const forceDomActions =
-    typeof localStorage !== "undefined" &&
-    localStorage.getItem("fleet-supervisor:force-dom-actions") === "1";
-  const hasNativeActionSlots =
-    !forceDomActions &&
-    typeof plugin.addComposerAction === "function" &&
-    typeof plugin.addMessageAction === "function";
-
-  if (hasNativeActionSlots) {
-    plugin.addComposerAction?.({
-      id: "skeptic-review",
-      title: COMPOSER_ACTION_TITLE,
-      icon: "SearchCheck",
-      action: councilReview,
-    });
-    plugin.addMessageAction?.({
-      id: "council-review",
-      title: MESSAGE_ACTION_TITLE,
-      icon: "Users",
-      action: councilReview,
-    });
-    // Enabled by default and switchable from the toolbar. `state` lets the host
-    // paint the current setting on the button — green while watching, red and
-    // muted when off — so the toast is confirmation rather than the only signal.
-    plugin.addComposerAction?.({
-      id: "fleet-supervisor",
-      title: SUPERVISOR_ACTION_TITLE,
-      icon: "Radar",
-      action: toggleAutoHandoff,
-      state: supervisorState,
-    });
-    // Native slots pass a fixed payload, so this always hands to the next entry
-    // in order. To start at a specific entry, use the injected picker or the
-    // settings surface to reorder first.
-    plugin.addComposerAction?.({
-      id: "hand-off",
-      title: HANDOFF_ACTION_TITLE,
-      icon: "SendHorizontal",
-      action: manualHandoffFromComposer,
-    });
-    return () => undefined;
-  }
-
-  const stopDomActions = mountDomActions({
-    composerLabel: COMPOSER_ACTION_TITLE,
-    messageLabel: MESSAGE_ACTION_TITLE,
-    supervisorLabel: SUPERVISOR_ACTION_TITLE,
-    handoffLabel: HANDOFF_ACTION_TITLE,
-    listFallbacks: async () => {
-      const status = await rendererBridgeGet("/v1/status");
-      const raw = Array.isArray(status.fallbacks) ? status.fallbacks : [];
-      return raw
-        .map((entry) => (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>)
-        .map((entry) => ({
-          id: typeof entry.id === "string" ? entry.id : "",
-          provider: typeof entry.provider === "string" ? entry.provider : "",
-        }))
-        .filter((entry) => entry.id.length > 0);
-    },
-    onHandoff: async (target, workerId) => {
-      if (!target.agentId) throw new Error("Open a conversation before handing off.");
-      const result = await rendererBridgePost("/v1/handoff", {
-        agentId: target.agentId,
-        workerId,
-        reason: "The user handed this task to the fleet from Paseo's toolbar.",
-      });
-      return typeof result.message === "string" && result.message.trim().length > 0
-        ? result.message
-        : "Handing the task to the fleet.";
-    },
-    onNotice: showDomNotice,
-    readSupervisorState: async () => {
-      const status = await rendererBridgeGet("/v1/status").catch(() => null);
-      return status === null ? null : status.autoHandoff === true;
-    },
-    toggleSupervisor: async () => {
-      const status = await rendererBridgeGet("/v1/status");
-      const next = status.autoHandoff !== true;
-      const result = await rendererBridgePost("/v1/auto-handoff", { enabled: next });
-      return result.autoHandoff === true;
-    },
-    onComposerAction: (target) =>
-      startCouncilFromRenderer({ ...target, scope: "latest-context" }),
-    onMessageAction: (target, message) =>
-      startCouncilFromRenderer({
-        ...target,
-        scope: "message",
-        messageId: message.messageId,
-        role: message.role,
-        text: message.text,
-        attachments: message.attachments,
-        images: message.images,
-      }),
+  // Buttons live in a native agent panel and in the command center. Both are
+  // stock Paseo contributions (0.5.0+), so this needs no patched build and no
+  // DOM injection — the two approaches this plugin used before the host grew
+  // surfaces of its own.
+  plugin.addWorkspacePanel({
+    id: "actions",
+    title: SUPERVISOR_ACTION_TITLE,
+    icon: "Radar",
+    context: "agent",
+    Component: AgentActionsPanel,
   });
 
-  return () => {
-    stopDomActions();
-  };
+  plugin.addCommandCenterItem({
+    id: "skeptic-review",
+    title: COMPOSER_ACTION_TITLE,
+    icon: "SearchCheck",
+    keywords: ["council", "review", "skeptic", "fleet"],
+    context: "agent",
+    async onSelect({ agent, rpc }) {
+      await rpc(councilReview, {
+        scope: "latest-context",
+        agentId: agent.id,
+        workspaceId: agent.workspaceId,
+      });
+    },
+  });
+
+  plugin.addCommandCenterItem({
+    id: "fleet-supervisor-toggle",
+    title: `${SUPERVISOR_ACTION_TITLE}: turn on or off`,
+    icon: "Radar",
+    keywords: ["fleet", "supervisor", "handoff", "quota"],
+    context: "agent",
+    async onSelect({ rpc }) {
+      await rpc(toggleAutoHandoff, { enabled: null });
+    },
+  });
+
+  plugin.addCommandCenterItem({
+    id: "hand-off",
+    title: HANDOFF_ACTION_TITLE,
+    icon: "SendHorizontal",
+    keywords: ["handoff", "fleet", "fallback"],
+    context: "agent",
+    async onSelect({ agent, rpc }) {
+      await rpc(manualHandoffFromComposer, {
+        scope: "latest-context",
+        agentId: agent.id,
+        workspaceId: agent.workspaceId,
+      });
+    },
+  });
+
+  return () => undefined;
 }

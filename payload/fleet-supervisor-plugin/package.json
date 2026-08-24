@@ -1,6 +1,6 @@
 {
   "name": "fleet-supervisor-paseo-plugin",
-  "version": "4.0.0-beta.2",
+  "version": "4.1.0-beta.1",
   "private": true,
   "type": "module",
   "scripts": {

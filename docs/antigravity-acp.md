@@ -1,10 +1,12 @@
-# Antigravity (Gemini) via ACP — **experimental**
+# Antigravity (Gemini) via ACP
 
-> **Status: the happy path has never been executed.**
-> The handshake, session lifecycle and model catalogue are verified against the
-> real `agy` CLI. A successful Gemini turn is **not** — the account used during
-> development was out of quota. Read [Verification status](#verification-status)
-> before relying on this.
+> **Status: verified.** A real Gemini turn round-trips through ACP — handshake,
+> session lifecycle, model catalogue, error propagation, and assistant text out.
+> Re-check any time with `node payload/tests/antigravity-acp.turn.mjs`.
+>
+> One real limitation remains, and it is the CLI's, not the adapter's: replies
+> arrive in a single chunk rather than streaming. See
+> [Known limitation](#known-limitation-no-token-streaming).
 
 ## Why an adapter is needed
 
@@ -81,7 +83,7 @@ Registered in `~/.paseo/config.json`:
 "antigravity": {
   "extends": "acp",
   "label": "Antigravity",
-  "description": "Google Antigravity (Gemini) via the agy CLI — EXPERIMENTAL",
+  "description": "Google Antigravity (Gemini) via the agy CLI",
   "command": ["<absolute path to node>", "<repo>/payload/src/antigravity-acp.mjs", "--skip-permissions"],
   "env": {}
 }
@@ -98,13 +100,12 @@ the flag.
 
 ## Verification status
 
-Run the handshake check:
+Two checks, both against the real CLI:
 
 ```bash
-node payload/tests/antigravity-acp.handshake.mjs
+node payload/tests/antigravity-acp.handshake.mjs   # no quota needed
+node payload/tests/antigravity-acp.turn.mjs        # sends a real prompt
 ```
-
-**Verified against the real CLI:**
 
 | Check | Result |
 |---|---|
@@ -112,29 +113,22 @@ node payload/tests/antigravity-acp.handshake.mjs
 | `loadSession` correctly declined | pass |
 | `newSession` returns a session id | pass |
 | Advertises models from `agy models` | pass — 14 models |
-| Advertises a current model | pass — `gemini-3.7-flash-high` |
 | Catalogue includes Gemini entries | pass |
 | Accepts a model change | pass |
 | Accepts `cancel` | pass |
+| Provider errors propagate through ACP | pass — a quota error arrived intact |
+| **A successful turn returns assistant text** | **pass** |
 
-Also verified: the `init` / `step_update` / `result` event shapes, observed from
-a real `agy --print --output-format stream-json` run.
+The turn test output that closed the last gap:
 
-**NOT verified:**
+```
+model   gemini-3.5-flash-low
+prompt  "Reply with exactly: OK"
+stop    end_turn
+text    "OK"
 
-- A successful turn producing assistant text. `result.response` is populated
-  from the observed schema, but has only ever been seen as `""` on the error
-  path, because the development account hit `Individual quota reached`.
-- Whether a *successful* run emits richer incremental events than the
-  quota-failed run did.
-- Fleet Supervisor handing off to this provider end to end.
-
-To finish verification once quota is available:
-
-```bash
-agy --print "Reply with exactly: OK" --output-format stream-json --model gemini-3.5-flash-low
+TURN VERIFIED — assistant text round-tripped through ACP.
 ```
 
-If that returns `"status":"OK"` with text in `result.response`, send a prompt to
-an Antigravity agent in Paseo and confirm the reply renders. Until someone has
-watched that happen, treat this adapter as unproven.
+Live in Paseo, the provider reports `ready` with 14 Gemini models, so it is
+selectable anywhere Fleet Supervisor offers a model.

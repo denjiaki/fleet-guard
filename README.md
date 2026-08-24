@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/denjiaki/fleet-guard/releases/tag/v4.0.0-beta.1"><strong>Fleet Supervisor 4 beta</strong></a>
+  <a href="https://github.com/denjiaki/fleet-guard/releases/latest"><strong>Fleet Supervisor 4 beta</strong></a>
   ·
   <a href="#getting-started">Getting started</a>
   ·
@@ -20,7 +20,7 @@
 
 Fleet Guard watches a root Claude Code task inside [Paseo](https://paseo.sh/). When Claude reports a real session or quota limit, Fleet Supervisor hands the same workspace and task context to the exact provider **and model** you chose—including another Claude model or a model running locally on your PC. It can nudge an unfinished agent, check a premature completion claim, cycle through fallbacks, and return the work to the original Claude task after a cooldown.
 
-Version 4 also adds multi-model review to Paseo itself: **Skeptic Review** in the composer reviews the latest task context, while the consensus icon beneath a message reviews that specific message and its attachments. The configured reviewers run independently and in parallel, then the original task receives their conclusions and writes one digest. These buttons need a Paseo built from source — see [You need a Paseo built from source](#you-need-a-paseo-built-from-source).
+Version 4 also adds multi-model review to Paseo itself. **Skeptic Review** sends the latest task context to every configured reviewer; they run independently and in parallel, and the original task receives their conclusions and writes one digest. It runs on **stock, released Paseo** — no patched build, no forked app.
 
 It does **not** bypass limits or share accounts. Every fallback uses its own official CLI, login, permissions, subscription, and quota.
 
@@ -48,9 +48,8 @@ remain editable when a CLI cannot publish a catalog.
 - Select exact models instead of only choosing a provider family.
 - Give every automatic-handoff model a built-in role—progress reporting, bug checking, QA, or skepticism—or a custom highest-priority system prompt.
 - Configure an independent Skeptic Review roster and review lens for each exact model; review prompts never inherit automatic-handoff instructions.
-- Review the latest task context from Paseo's **Skeptic Review** composer button.
-- Review one user or assistant message, including uploaded PDFs and file attachments, from the consensus icon beneath that message.
-- Turn automatic handoff on and off from the **Fleet Supervisor** button in Paseo's composer toolbar, which shows its own state: green while watching, red and greyed when off.
+- Review the latest task context with **Skeptic Review**, from the Fleet Supervisor panel in any agent or from the command center.
+- Turn automatic handoff on and off from the **Fleet Supervisor** button, which shows its own state: green while watching, red and muted when off.
 - Hand the current task to the fleet yourself with the **Hand off** button, without waiting for a quota limit.
 - Edit every setting inside Paseo — general switches, continuation policy, fallback order, reviewers, and the local model — on the Fleet Supervisor plugin surface. The installer never needs reopening.
 - Keep Codex, local-model, Cursor, and Copilot handoffs visible as child tasks in the same Paseo workspace.
@@ -75,26 +74,19 @@ remain editable when a CLI cannot publish a catalog.
 3. Start Paseo. The plugin starts Fleet Supervisor itself — there is no separate launcher or console command.
 4. Open **Fleet Supervisor** from Paseo's sidebar to set your fallback order, reviewers, and continuation policy.
 
-### You need a Paseo built from source
+### Requires Paseo 0.5.0 or newer
 
-**This is the one real prerequisite, and there is no way around it today.** Every
-user interface piece — the Skeptic Review and Fleet Supervisor buttons, and the
-settings surface itself — is a Paseo plugin, and **no released Paseo has a plugin
-system**. Plugin support landed on upstream `main` on 2026-08-14, the day *after*
-v0.4.0 shipped, and is still being reworked.
+Everything here is a plain Paseo plugin, so a normal installed Paseo from the
+[official releases](https://github.com/getpaseo/paseo/releases) is all you need.
 
-Checked against tag `v0.4.0`: there is no `packages/server/src/server/plugins`
-directory at all. A stock 0.4.0 install cannot render these buttons, cannot show
-the settings surface, and will **refuse to start entirely** if its config
-contains the `plugins` keys, because its config schema rejects unknown keys.
+Paseo's plugin system shipped in **v0.5.0**. On an older Paseo the guard's
+automatic handoff still works — it talks to the daemon's normal API — but the
+buttons and the settings surface will not appear, because there is nothing to
+contribute them to. Worse, a pre-0.5.0 Paseo **refuses to start** if its config
+carries the `plugins` keys, since it rejects unknown config keys.
 
-Until plugin support reaches a release, build Paseo from source with
-`paseo-plugin-action-slots.patch` applied — see
-[Running a patched Paseo build](#running-a-patched-paseo-build). Automatic
-handoff itself does not depend on any of this: the guard talks to Paseo's daemon
-over its normal WebSocket API and works against a stock Paseo.
-
-Windows may show an **Unknown publisher** warning because this community beta is not code-signed. The complete source is here for review.
+Earlier versions of Fleet Supervisor required a Paseo built from a patch, because
+0.4.0 had no plugin system at all. That is no longer true and the patch is gone.
 
 ### Requirements
 
@@ -132,7 +124,7 @@ Claude reaches a confirmed session limit
 
 A genuine request for human input remains a hard stop. A second, audited completion verdict also stops the chain—otherwise an automatic loop would never know when the work was actually done.
 
-Fully quitting Paseo, including its daemon, stops Fleet Guard. Reopening Paseo through the combined shortcut can resume a recent interrupted chain.
+Fully quitting Paseo, including its daemon, stops Fleet Guard. Reopening Paseo starts it again and can resume a recent interrupted chain.
 
 ## Exact models and model-specific roles
 
@@ -153,14 +145,13 @@ a custom review prompt.
 > Paseo does not have installed, and offers a one-click way to make the
 > inherited list explicit and editable.
 
-- **Skeptic Review** in the composer sends the latest projected task context to every selected reviewer.
-- The consensus icon beneath a message sends only that message plus supported attachments and images.
+- **Skeptic Review** sends the latest projected task context to every selected reviewer. Run it from the Fleet Supervisor panel inside an agent, or from the command center (**Ctrl+K** / **⌘K**).
 - Reviewers are created as parallel child tasks with review-only instructions and a structured response contract.
 - Results return to the original task, which reconciles agreement and disagreement into one user-facing digest.
 
 The local bridge between the Paseo plugin and Fleet Supervisor listens only on `127.0.0.1`, requires a random private bearer token, rejects requests over 2 MB, and never exposes provider credentials.
 
-## Antigravity (Gemini) — experimental
+## Antigravity (Gemini)
 
 Paseo drives external agents over the Agent Client Protocol, and Antigravity's
 `agy` CLI has no ACP mode, so Paseo could not address it at all — an
@@ -170,15 +161,12 @@ Paseo drives external agents over the Agent Client Protocol, and Antigravity's
 drives `agy --print --output-format stream-json` underneath, advertising the
 real Gemini catalogue so the model picker works.
 
-> **Experimental — the happy path is unproven.** The ACP handshake, session
-> lifecycle, model catalogue (14 Gemini models, live in Paseo) and error
-> propagation are all verified against the real CLI. A **successful Gemini turn
-> is not**: the account used during development was out of quota, so
-> `result.response` has only ever been observed empty on the error path. Replies
-> also arrive all at once rather than streaming, because `agy`'s `step_update`
-> events carry no text.
+> **Verified.** A real Gemini turn round-trips through ACP, and the provider
+> reports `ready` with 14 Gemini models inside Paseo. One limitation is the
+> CLI's own: `agy` emits text only in its final result, so replies arrive in a
+> single chunk rather than streaming.
 
-Full detail, including how to finish verification: [docs/antigravity-acp.md](docs/antigravity-acp.md).
+Full detail: [docs/antigravity-acp.md](docs/antigravity-acp.md).
 
 ## Privacy and permissions
 
@@ -205,41 +193,31 @@ npm test --prefix payload
 node payload/setup.mjs
 ```
 
-The buttons and settings surface additionally require a Paseo built from source
-with `paseo-plugin-action-slots.patch` applied, until plugin support reaches a
-Paseo release.
+Everything ships as a Paseo plugin, so there is nothing to compile and no
+patched Paseo to build. Install a normal Paseo 0.5.0+ and run the setup script.
 
-### Running a patched Paseo build
+Two checks worth running after a change:
 
-The Skeptic Review buttons and the plugin surface need Paseo built from source with
-`paseo-plugin-action-slots.patch` applied. Three things bite when you do that:
+```bash
+node payload/tests/plugin-contributions.test.mjs   # what the client bundle registers
+node payload/tests/antigravity-acp.turn.mjs        # a real Gemini turn via ACP
+```
 
-1. **Close Paseo before packaging.** electron-builder clears its output
-   directory, and Windows will not let it delete a running `Paseo.exe`. The
-   failure looks unrelated — `app-builder.exe process failed
-   ERR_ELECTRON_BUILDER_CANNOT_EXECUTE` — but the real line above it is
-   `remove ...\Paseo.exe: Access is denied`.
+The first one matters more than it looks. `paseo plugin ls` only proves the
+*server* bundle loaded; the buttons live in the client bundle, which the daemon
+never evaluates. That test compiles the client bundle the way Paseo does, runs
+it against a mock host, and asserts on the contributions it registers — so a
+plugin cannot sit at `running` with a broken UI.
 
-2. **Windows needs symlink privileges to build the installer.** electron-builder
-   extracts a code-signing toolchain containing macOS symlinks and fails with
-   `Cannot create symbolic link : A required privilege is not held by the
-   client`. Enable Developer Mode (Settings → System → For developers), or run
-   the packaging step elevated. Only the installer needs this; `win-unpacked` is
-   produced fine without it, and a shortcut to it works identically.
+To iterate on the plugin itself:
 
-3. **Delete `resources/app-update.yml`, or the patch will silently undo itself.**
-   The generated build points its auto-updater at upstream `getpaseo/paseo`. If
-   it ever updates, the patched build is replaced by stock Paseo, which has no
-   plugin system — and Paseo then refuses to start at all, because a config
-   containing `pluginsEnabled`/`plugins` fails its strict schema:
+```bash
+paseo plugin reload fleet-supervisor
+paseo plugin logs fleet-supervisor
+```
 
-   ```
-   [Config] Invalid config in ~/.paseo/config.json:
-     - : Unrecognized keys: "pluginsEnabled", "plugins"
-   ```
-
-   Running from `win-unpacked` with the updater file removed avoids this
-   entirely, which is why a shortcut is preferred over installing.
+Reload picks up source edits. Do not restart the daemon for that — it can kill
+a running agent.
 
 ## License
 

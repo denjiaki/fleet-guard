@@ -50,6 +50,15 @@ jobs:
           npm install --no-audit --no-fund
           npm run typecheck
 
+      # `paseo plugin ls` only proves the SERVER bundle loaded. The buttons live
+      # in the client bundle, which the daemon never evaluates — so this compiles
+      # it the way Paseo does and asserts on the contributions it registers.
+      - name: Verify plugin contributions
+        working-directory: payload
+        run: |
+          npm install --no-audit --no-fund --no-save esbuild
+          node tests/plugin-contributions.test.mjs
+
       # The installer is the part most likely to break on a specific platform:
       # path separators, home resolution, and directory creation all differ.
       # Running it for real on each OS is the only check that means anything.
@@ -143,9 +152,7 @@ jobs:
           mkdir -p "dist/$STAGE/tests"
           cp payload/tests/antigravity-acp.handshake.mjs "dist/$STAGE/tests/"
           cp payload/tests/antigravity-acp.turn.mjs "dist/$STAGE/tests/"
-          # The buttons need a Paseo built from source until plugin support
-          # reaches a Paseo release, so ship the patch alongside.
-          cp paseo-plugin-action-slots.patch "dist/$STAGE/"
+          cp payload/tests/plugin-contributions.test.mjs "dist/$STAGE/tests/"
           mkdir -p "dist/$STAGE/docs"
           [ -f docs/antigravity-acp.md ] && cp docs/antigravity-acp.md "dist/$STAGE/docs/" || true
           for doc in README.md FLEET-SUPERVISOR-CHANGES.md LICENSE; do
@@ -164,17 +171,15 @@ jobs:
           Supervisor starts with Paseo and exits with it; there is no shortcut
           to launch. Settings live in Paseo's sidebar.
 
-          IMPORTANT — the buttons need a Paseo built from source.
-          No released Paseo has a plugin system yet: it landed upstream the day
-          after v0.4.0 shipped. Automatic handoff works against a stock Paseo,
-          but Skeptic Review, the Fleet Supervisor toggle, and the settings
-          surface do not. To get them, build Paseo from source with
-          paseo-plugin-action-slots.patch applied (git am < the patch). See
-          README.md, "Running a patched Paseo build".
+          Requires Paseo 0.5.0 or newer, which is when Paseo's plugin system
+          shipped. A normal installed Paseo from the official releases is all you
+          need — there is no patched build. On an older Paseo the automatic
+          handoff still works, but the buttons and settings surface will not
+          appear, and a pre-0.5.0 Paseo refuses to start once the config carries
+          the plugins keys.
 
-          Antigravity support is EXPERIMENTAL: the ACP handshake and Gemini
-          model catalogue are verified, but a successful Gemini turn has not
-          been. See docs/antigravity-acp.md.
+          Antigravity (Gemini) support is verified end to end, including a real
+          turn. See docs/antigravity-acp.md.
           TXT
           rm -rf "dist/$STAGE/fleet-supervisor-plugin/node_modules"
           (cd dist && zip -qr "$STAGE.zip" "$STAGE" && tar -czf "$STAGE.tar.gz" "$STAGE")

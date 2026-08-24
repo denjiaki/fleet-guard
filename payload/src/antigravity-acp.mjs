@@ -3,8 +3,8 @@
  * ACP adapter for Antigravity's `agy` CLI.
  * =======================================
  *
- * STATUS: EXPERIMENTAL — the happy path has never been executed.
- * See "Verification status" at the bottom of this comment before trusting it.
+ * STATUS: VERIFIED. A real Gemini turn round-trips through ACP —
+ * `payload/tests/antigravity-acp.turn.mjs` prints TURN VERIFIED.
  *
  * Why this exists
  * ---------------
@@ -44,19 +44,20 @@
  *
  * Verification status
  * -------------------
- * At the time of writing, this machine's Antigravity account was out of quota
- * ("Individual quota reached … Resets in 34h36m34s"), so NO successful `agy`
- * turn could be produced. What has been exercised:
+ * Verified against the real CLI and a live model:
  *
- *   - `agy models` parsing, against real CLI output
- *   - `agy --print --output-format stream-json` event shapes, against a real
- *     (quota-failed) run — init, step_update and result were all observed
- *   - the ACP handshake and session lifecycle against Paseo
+ *   - `agy models` parsing
+ *   - the `init` / `step_update` / `result` event shapes
+ *   - the ACP handshake, session lifecycle, model changes and cancel
+ *   - error propagation (a provider quota error arrives intact through ACP)
+ *   - A SUCCESSFUL TURN: prompt in, assistant text out, stopReason end_turn
  *
- * What has NOT been exercised: a successful turn producing assistant text.
- * `result.response` is populated from the observed schema but has only ever
- * been seen as an empty string on the error path. Treat the happy path as
- * unproven until someone watches a Gemini reply land in Paseo.
+ * Re-check with:
+ *   node payload/tests/antigravity-acp.handshake.mjs   # no quota needed
+ *   node payload/tests/antigravity-acp.turn.mjs        # sends a real prompt
+ *
+ * The one real limitation is streaming, described above: replies arrive in one
+ * chunk because `agy` only emits text in its final `result`.
  */
 
 import { spawn } from "node:child_process";
