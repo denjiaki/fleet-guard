@@ -64,15 +64,55 @@ remain editable when a CLI cannot publish a catalog.
 
 ## Getting started
 
-1. Install the Fleet Supervisor plugin and guard with the cross-platform setup script:
+Paseo has no plugin store — a plugin is a directory on your machine that Paseo
+is pointed at. So installing is: download, unpack, run setup once.
+
+1. Download `fleet-supervisor-<version>.zip` from the
+   [latest release](https://github.com/denjiaki/fleet-guard/releases/latest)
+   and unpack it somewhere permanent. **Paseo loads the plugin from where it
+   sits**, so pick a real home for it — not Downloads or a temp folder — and
+   re-run setup if you ever move it.
+
+2. Install its dependencies and register it:
 
    ```bash
-   node payload/setup.mjs
+   npm ci
+   node setup.mjs
    ```
 
-2. Finish any requested provider CLI sign-ins.
-3. Start Paseo. The plugin starts Fleet Supervisor itself — there is no separate launcher or console command.
-4. Open **Fleet Supervisor** from Paseo's sidebar to set your fallback order, reviewers, and continuation policy.
+   Setup registers the plugin through Paseo's own CLI when it can find it, which
+   applies immediately — no restart. Otherwise it writes the registration to
+   `~/.paseo/config.json` and tells you to restart Paseo. It is safe to re-run:
+   installing again reloads the plugin, and moving the folder re-points it.
+
+3. Finish any provider CLI sign-ins you have not done (Claude, Codex, Cursor,
+   Copilot, `agy`).
+
+4. Open **Fleet Supervisor** in Paseo's sidebar and set your fallback order,
+   reviewers, and continuation policy.
+
+Setup turns on Paseo's plugin system (`pluginsEnabled`) if it is off, and says
+so when it does. Paseo plugins are trusted, unsandboxed code: the guard runs on
+your machine with your permissions, and the UI runs inside Paseo. The source is
+here to read.
+
+### Where the buttons are
+
+- **Fleet Supervisor panel**, inside any agent — Skeptic Review, the Fleet
+  Supervisor on/off toggle, and Hand off.
+- **Command center** (**Ctrl+K** / **⌘K**) — the same three actions.
+- **Sidebar → Fleet Supervisor** — all settings.
+
+To manage it later, use Paseo's own CLI:
+
+```bash
+paseo plugin ls
+paseo plugin reload fleet-supervisor
+paseo plugin logs fleet-supervisor
+```
+
+Uninstall with `node setup.mjs --uninstall`, which also clears the plugin keys
+from Paseo's config so an older Paseo can still start.
 
 ### Requires Paseo 0.5.0 or newer
 

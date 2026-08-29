@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fleet Supervisor â€” cross-platform setup.
+ * Fleet Supervisor — cross-platform setup.
  *
  * Replaces the Windows-only C# setup app and launcher shortcut. There is no
  * longer anything platform-specific to install:
@@ -20,8 +20,8 @@
  *   node setup.mjs --keep-legacy   # do not clean up an older install
  *
  * Safe to re-run: every write is idempotent and existing settings are kept.
- * Installing also removes what a pre-v4 install left behind â€” the Windows-only
- * launcher directory and its shortcuts â€” so upgrading does not leave a stale
+ * Installing also removes what a pre-v4 install left behind — the Windows-only
+ * launcher directory and its shortcuts — so upgrading does not leave a stale
  * shortcut pointing at a guard that no longer belongs there.
  */
 
@@ -29,6 +29,7 @@ import { readFile, writeFile, mkdir, access, rm, readdir } from "node:fs/promise
 import { constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -109,7 +110,7 @@ async function writeJson(file, value) {
 /**
  * Fleet Guard v3 and earlier installed a Windows-only C# launcher into
  * `%LOCALAPPDATA%\PaseoFleetGuard` and left shortcuts behind that start it.
- * None of that is used any more â€” the plugin starts the guard itself â€” but an
+ * None of that is used any more — the plugin starts the guard itself — but an
  * upgrade used to leave both in place, so a stale shortcut would silently
  * launch the old guard against the new Paseo.
  *
@@ -118,8 +119,8 @@ async function writeJson(file, value) {
  */
 /**
  * Matched by prefix rather than exact name. Older installs shipped several
- * shortcuts ("â€¦ - On Paseo", "Fleet Guard Settings", and others), and an exact
- * list quietly misses whichever one it does not know about â€” which is how a
+ * shortcuts ("… - On Paseo", "Fleet Guard Settings", and others), and an exact
+ * list quietly misses whichever one it does not know about — which is how a
  * stale "Fleet Guard Settings" shortcut survived a cleanup that removed its
  * target directory, leaving a shortcut pointing at nothing.
  */
@@ -198,6 +199,82 @@ async function removeLegacyArtifacts() {
   return { removed, failed };
 }
 
+/* ------------------------------------------------------------------ */
+/* Paseo CLI                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Paseo's own CLI is the supported way to register a plugin, and it applies
+ * live — the daemon picks the plugin up without a restart. Writing
+ * `config.json` directly works too, but only takes effect when the daemon next
+ * reads its config, which means telling the user to quit Paseo.
+ *
+ * The CLI ships inside the installed app, so it is usually present even when it
+ * is not on PATH.
+ */
+function paseoCliCandidates() {
+  const home = os.homedir();
+  const candidates = [];
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+    candidates.push(path.join(localAppData, "Programs", "Paseo", "resources", "bin", "paseo.cmd"));
+  } else if (process.platform === "darwin") {
+    candidates.push("/Applications/Paseo.app/Contents/Resources/bin/paseo");
+    candidates.push(path.join(home, "Applications", "Paseo.app", "Contents", "Resources", "bin", "paseo"));
+  } else {
+    candidates.push("/opt/Paseo/resources/bin/paseo");
+    candidates.push("/usr/lib/paseo/resources/bin/paseo");
+  }
+  return candidates;
+}
+
+async function resolvePaseoCli() {
+  // The CLI talks to the *running* daemon, which owns the default Paseo home.
+  // When the caller has redirected the home (tests, CI, a second daemon), using
+  // it would register the plugin into the wrong daemon — so fall back to
+  // writing the config file the caller actually named.
+  const redirected =
+    arg("--paseo-home") !== undefined ||
+    arg("--fleet-home") !== undefined ||
+    process.env.PASEO_HOME !== undefined;
+  if (redirected) return null;
+  if (arg("--paseo-cli")) return arg("--paseo-cli");
+  for (const candidate of paseoCliCandidates()) {
+    if (await exists(candidate)) return candidate;
+  }
+  return null; // Fall back to editing config.json.
+}
+
+function runPaseoCli(cli, args) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      // Node refuses to spawn a .cmd/.bat directly on Windows, and throws
+      // EINVAL *synchronously* — outside this promise — so it has to be caught
+      // here rather than by the "error" handler below. Batch files are run
+      // through cmd.exe with a verbatim command line so paths containing
+      // spaces survive quoting.
+      const isWindowsBatch = process.platform === "win32" && /\.(cmd|bat)$/i.test(cli);
+      child = isWindowsBatch
+        ? spawn(
+            process.env.ComSpec ?? "cmd.exe",
+            ["/d", "/s", "/c", `"${[cli, ...args].map((part) => `"${part}"`).join(" ")}"`],
+            { stdio: ["ignore", "pipe", "pipe"], windowsVerbatimArguments: true },
+          )
+        : spawn(cli, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      resolve({ ok: false, output: String(error?.message ?? error) });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => resolve({ ok: false, output: String(error?.message ?? error) }));
+    child.on("close", (code) => resolve({ ok: code === 0, output: `${stdout}${stderr}`.trim() }));
+  });
+}
+
 /** Resolve the plugin directory and guard script relative to this file. */
 async function resolveLayout() {
   const candidates = [
@@ -234,15 +311,67 @@ async function install() {
   }
 
   // --- Paseo side: enable plugins and register this one -------------------
+  //
+  // The global `pluginsEnabled` switch has no CLI command, so it is written
+  // here either way. Registration itself prefers `paseo plugin install`, which
+  // validates the directory and applies immediately; editing config.json only
+  // takes effect the next time the daemon reads its config.
   const paseoConfig = await readJson(paseoConfigFile, {});
+  const pluginsWereEnabled = paseoConfig.pluginsEnabled === true;
   paseoConfig.version ??= 1;
   paseoConfig.pluginsEnabled = true;
-  paseoConfig.plugins = {
-    ...(paseoConfig.plugins ?? {}),
-    [PLUGIN_ID]: { source: "directory", path: layout.plugin, enabled: true },
-  };
-  await writeJson(paseoConfigFile, paseoConfig);
-  console.log(`Registered the ${PLUGIN_ID} plugin in ${paseoConfigFile}`);
+
+  if (!pluginsWereEnabled) {
+    console.log("");
+    console.log("Enabling Paseo's plugin system (pluginsEnabled: true).");
+    console.log("Paseo plugins are trusted, unsandboxed code: this plugin's backend runs");
+    console.log("on this machine with your permissions, and its UI runs inside Paseo.");
+    console.log("");
+  }
+
+  const cli = await resolvePaseoCli();
+  let registeredLive = false;
+
+  if (cli) {
+    await writeJson(paseoConfigFile, paseoConfig);
+    // Applies the pluginsEnabled change to the already-running daemon.
+    await runPaseoCli(cli, ["reload"]);
+
+    // `plugin install` refuses an ID that is already configured, which is the
+    // normal case on an upgrade. Pick the call that matches the current state
+    // so re-running setup stays idempotent:
+    //   not configured        -> install
+    //   configured, same path -> reload (picks up edited source)
+    //   configured, moved     -> remove, then install at the new path
+    const existing = paseoConfig.plugins?.[PLUGIN_ID];
+    let action;
+    if (!existing) {
+      action = await runPaseoCli(cli, ["plugin", "install", layout.plugin]);
+    } else if (existing.path !== layout.plugin) {
+      await runPaseoCli(cli, ["plugin", "remove", PLUGIN_ID]);
+      action = await runPaseoCli(cli, ["plugin", "install", layout.plugin]);
+    } else {
+      action = await runPaseoCli(cli, ["plugin", "reload", PLUGIN_ID]);
+    }
+
+    if (action.ok) {
+      registeredLive = true;
+      console.log(`Registered the ${PLUGIN_ID} plugin with Paseo's CLI.`);
+    } else {
+      console.log("Paseo's CLI could not register the plugin, so config.json was used instead:");
+      const reason = action.output.trim().slice(0, 200);
+      if (reason) console.log(`  ${reason}`);
+    }
+  }
+
+  if (!registeredLive) {
+    paseoConfig.plugins = {
+      ...(paseoConfig.plugins ?? {}),
+      [PLUGIN_ID]: { source: "directory", path: layout.plugin, enabled: true },
+    };
+    await writeJson(paseoConfigFile, paseoConfig);
+    console.log(`Registered the ${PLUGIN_ID} plugin in ${paseoConfigFile}`);
+  }
 
   // --- Fleet side: keep existing settings, fill in what is missing --------
   const existing = await readJson(path.join(fleetHome, "config.json"), null);
@@ -267,9 +396,15 @@ async function install() {
   if (!process.argv.includes("--keep-legacy")) await removeLegacyArtifacts();
 
   console.log("");
-  console.log("Done. Fully quit Paseo (including its daemon) and reopen it.");
-  console.log("Fleet Supervisor starts with Paseo and exits with it â€” no shortcut needed.");
-  console.log("You will find its settings in Paseo's sidebar, and Skeptic Review in the composer.");
+  if (registeredLive) {
+    console.log("Done — the plugin is live. No restart needed.");
+  } else {
+    console.log("Done. Fully quit Paseo (including its daemon) and reopen it.");
+  }
+  console.log("Fleet Supervisor starts with Paseo and exits with it — no shortcut needed.");
+  console.log("Settings are in Paseo's sidebar. Skeptic Review, the Fleet Supervisor");
+  console.log("toggle and Hand off live in the Fleet Supervisor panel inside an agent,");
+  console.log("and in the command center (Ctrl+K / Cmd+K).");
 }
 
 async function uninstall() {
@@ -281,7 +416,7 @@ async function uninstall() {
   }
   delete paseoConfig.plugins[PLUGIN_ID];
   // Leaving `pluginsEnabled` set is harmless for a Paseo that understands it,
-  // but a Paseo without a plugin system refuses to start on unknown keys â€” so
+  // but a Paseo without a plugin system refuses to start on unknown keys — so
   // drop both once nothing is registered.
   if (Object.keys(paseoConfig.plugins).length === 0) {
     delete paseoConfig.plugins;
