@@ -5,7 +5,7 @@
 <h1 align="center">Fleet Guard</h1>
 
 <p align="center">
-  A friendly Windows companion for Paseo that keeps long-running Claude jobs moving when a session limit gets in the way.
+  A Paseo plugin that keeps long-running Claude jobs moving when a session limit gets in the way. Windows, macOS and Linux.
 </p>
 
 <p align="center">
@@ -33,14 +33,6 @@ every key the guard reads. Changes save straight to disk and the running guard
 picks them up, so nothing has to be reinstalled to change a setting. Model fields
 remain editable when a CLI cannot publish a catalog.
 
-<p align="center">
-  <img src="docs/assets/provider-setup.png" width="860" alt="Fleet Guard provider setup screen">
-</p>
-
-<p align="center">
-  <img src="docs/assets/fallback-order.png" width="860" alt="Fleet Guard fallback order and continuation policy screen">
-</p>
-
 ## What it can do
 
 - Continue a quota-blocked Claude task with OpenAI Codex, a local model, Google Antigravity, Cursor Agent, or GitHub Copilot CLI.
@@ -51,7 +43,7 @@ remain editable when a CLI cannot publish a catalog.
 - Review the latest task context with **Skeptic Review**, from the Fleet Supervisor panel in any agent or from the command center.
 - Turn automatic handoff on and off from the **Fleet Supervisor** button, which shows its own state: green while watching, red and muted when off.
 - Hand the current task to the fleet yourself with the **Hand off** button, without waiting for a quota limit.
-- Edit every setting inside Paseo — general switches, continuation policy, fallback order, reviewers, and the local model — on the Fleet Supervisor plugin surface. The installer never needs reopening.
+- Edit every setting inside Paseo — general switches, continuation policy, fallback order, reviewers, and the local model — on the Fleet Supervisor plugin surface.
 - Keep Codex, local-model, Cursor, and Copilot handoffs visible as child tasks in the same Paseo workspace.
 - Prioritize providers in any order.
 - Nudge the same unfinished child agent instead of constantly creating replacements.
@@ -130,20 +122,23 @@ Earlier versions of Fleet Supervisor required a Paseo built from a patch, becaus
 
 ### Requirements
 
-- Windows 10 or Windows 11
-- Paseo Desktop
+- **Paseo 0.5.0 or newer.** Verified on 0.5.2 and 0.6.1.
+- Windows, macOS or Linux. Nothing here is compiled, and the settings UI is a
+  Paseo surface, so Paseo renders it wherever it runs.
 - Node.js 22 or newer
 - Claude Code, installed and signed in
 - At least one fallback provider you can use
 
 ## Use a model running on your PC
 
-Choose **Local model** on the provider page to add an Ollama, LM Studio, llama.cpp, or other OpenAI-compatible server running on the same computer.
+Fleet Supervisor can hand work to an Ollama, LM Studio, llama.cpp, or other
+OpenAI-compatible server running on the same computer.
 
 1. Install [OpenCode](https://opencode.ai/docs/) so the model has a real coding-agent harness.
 2. Start the local model server. Ollama's default endpoint is `http://127.0.0.1:11434/v1`.
-3. Click **Configure**, then **Find models**.
-4. Choose one of the models returned by the server and place **Local model** anywhere in the fallback order.
+3. Open **Fleet Supervisor** in Paseo's sidebar and fill in the **Local model**
+   section with that endpoint and the model name.
+4. Add it to the fallback order at whatever priority you want.
 
 Fleet Guard creates a separate OpenCode profile for local handoffs. It gives that profile read, edit, and shell tools in the shared workspace without changing the user's normal OpenCode configuration. The endpoint is restricted to the same PC, and Fleet Guard does not request or store a local API key.
 
@@ -216,9 +211,28 @@ Fleet-created Cursor tasks use an unattended provider profile. Codex uses auto-r
 
 ## Status, settings, and removal
 
-- Open **Fleet Guard Settings** from the Start Menu to change providers, priority, nudges, cooldown, or continuation behavior.
-- Run `STATUS.cmd` from the installation folder to see the current policy, latest chain, next retry, and recent log entries.
-- Run `UNINSTALL.cmd` to stop Fleet Guard and remove its shortcuts and Fleet-only Cursor/local-model profiles. Logs and configuration remain available for recovery.
+Everything is inside Paseo or its CLI — there are no shortcuts, tray icons or
+`.cmd` files any more.
+
+- **Settings:** open **Fleet Supervisor** in Paseo's sidebar to change providers,
+  priority, roles, reviewers, nudges, cooldown, or continuation behaviour.
+- **Status:** the Fleet Supervisor panel inside an agent shows whether automatic
+  handoff is watching. For the plugin's own output:
+
+  ```bash
+  paseo plugin ls
+  paseo plugin logs fleet-supervisor
+  ```
+
+  The guard's log is `~/.paseo-fleet-guard/guard.log`, and its settings are
+  `~/.paseo-fleet-guard/config.json`.
+
+- **Removal:** `node setup.mjs --uninstall`. It unregisters the plugin and drops
+  the `plugins` keys from Paseo's config, so an older Paseo can still start.
+  Logs and configuration under `~/.paseo-fleet-guard` are left for recovery.
+
+Fleet Supervisor starts and exits with Paseo. Quitting Paseo, including its
+daemon, stops it; there is no background service or login item.
 
 ## Build and test from source
 
